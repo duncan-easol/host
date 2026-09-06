@@ -40,6 +40,11 @@ final class ThemeBarView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         Theme.current.fill(Theme.roundedBarPath(bounds, radius: 10), stripeWidth: 34)
     }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        AppDelegate.shared?.applyApplicationIcon(for: effectiveAppearance)
+    }
 }
 
 /// A tab button that distinguishes a click from a drag.
@@ -138,6 +143,9 @@ final class TabStripController: NSObject, NSWindowDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(appDidActivate(_:)),
             name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(appDidLaunch(_:)),
+            name: NSWorkspace.didLaunchApplicationNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(appDidTerminate(_:)),
             name: NSWorkspace.didTerminateApplicationNotification, object: nil)
@@ -557,39 +565,22 @@ final class TabStripController: NSObject, NSWindowDelegate {
 
     // MARK: - Quitting
 
-    /// Quitting an app closes its tab and moves you to the next one still running.
-    ///
-    /// "Next open application" rather than simply the next tab: the tab after it
-    /// may be an app that is not running, and selecting that would launch it --
-    /// quitting one thing is a poor reason to start another.
+    /// A hosted app can quit without removing its tab. Its bundle ID remains the
+    /// attachment point, so the next launch can restore the app to the workspace.
     @objc private func appDidTerminate(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let id = app.bundleIdentifier,
-              let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == id }) else { return }
-
-        let removed = workspace.tabs.remove(at: index)
+              workspace.tabs.contains(where: { $0.bundleIdentifier == id }) else { return }
         WindowManager.shared.forget(bundleID: id)
-        if let active = activeIndex {
-            if active == index { activeIndex = nil }
-            else if active > index { activeIndex = active - 1 }
-        }
-        Store.save(workspace)
-        rebuild()
-        AppDelegate.shared?.registerHotKeys()
-        Log.line("\(removed.name) quit; tab closed")
+        Log.line("\(id) quit; keeping its tab for automatic reattachment")
+    }
 
-        guard !workspace.tabs.isEmpty else { return }
-        // Start at the removed position so focus moves forwards through the strip,
-        // wrapping round rather than stopping at the end.
-        for offset in 0..<workspace.tabs.count {
-            let candidate = (index + offset) % workspace.tabs.count
-            if WindowManager.runningApp(workspace.tabs[candidate].bundleIdentifier) != nil {
-                Log.line("  moving to \(workspace.tabs[candidate].name)")
-                select(index: candidate)
-                return
-            }
-        }
-        Log.line("  nothing else in the workspace is running; leaving focus where it is")
+    @objc private func appDidLaunch(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              let id = app.bundleIdentifier,
+              let tab = workspace.tabs.first(where: { $0.bundleIdentifier == id }) else { return }
+        Log.line("\(tab.name) relaunched; reattaching to workspace")
+        WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame, reason: "relaunched")
     }
 
     // MARK: - Reordering by dragging
