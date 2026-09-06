@@ -309,9 +309,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Ask the asset catalog for the icon in the current system appearance.
     /// This keeps the Dock icon aligned with the light/dark app-icon variants.
-    private func applyApplicationIcon() {
+    func applyApplicationIcon(for appearance: NSAppearance = NSApp.effectiveAppearance) {
         guard let icon = NSImage(named: NSImage.Name("AppIcon")) else { return }
-        guard NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua else {
+        let systemIsDark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        let appearanceIsDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        guard systemIsDark || appearanceIsDark else {
             NSApp.applicationIconImage = icon
             return
         }
