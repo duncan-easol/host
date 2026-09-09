@@ -8,8 +8,8 @@ import Carbon.HIToolbox
 /// also receive the keystroke. RegisterEventHotKey swallows the event, and it
 /// works from an accessory app that never becomes active.
 ///
-/// Host only claims Option-Shift-[ and Option-Shift-]. Option-digit combinations
-/// are text input on several keyboard layouts, including Option-3 for `#`.
+/// Host only claims Command-Shift-[ and Command-Shift-]. Option-digit combinations
+/// remain available for text input, including Option-3 for `#`.
 final class HotKeyCenter {
     static let shared = HotKeyCenter()
 
@@ -19,9 +19,9 @@ final class HotKeyCenter {
 
     private init() {}
 
-    func registerOptionShiftBrackets(previous: @escaping () -> Void,
-                                     next: @escaping () -> Void) {
-        let modifiers = UInt32(optionKey | shiftKey)
+    func registerCommandShiftBrackets(previous: @escaping () -> Void,
+                                      next: @escaping () -> Void) {
+        let modifiers = UInt32(cmdKey | shiftKey)
         register(keyCode: UInt32(kVK_ANSI_LeftBracket), modifiers: modifiers,
                  id: 100, handler: previous)
         register(keyCode: UInt32(kVK_ANSI_RightBracket), modifiers: modifiers,

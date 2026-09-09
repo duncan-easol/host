@@ -90,6 +90,8 @@ final class TabStripController: NSObject, NSWindowDelegate {
     private let cog = NSButton()
     private var buttons: [TabButton] = []
     private var recentAppIDs: [String] = []
+    private var runningAppCycle = RunningAppCycle()
+    private var cycleResetWork: DispatchWorkItem?
     private(set) var activeIndex: Int?
 
     init(workspace: Workspace) {
@@ -339,10 +341,16 @@ final class TabStripController: NSObject, NSWindowDelegate {
 
     @objc private func tabClicked(_ sender: NSButton) {
         guard let button = sender as? TabButton else { return }
-        if let index = button.workspaceIndex {
+        resetRunningAppCycle()
+        selectRunningApp(bundleIdentifier: button.bundleIdentifier, name: button.tabName)
+    }
+
+    private func selectRunningApp(bundleIdentifier: String, name: String? = nil) {
+        if let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
             select(index: index)
         } else {
-            placeRunningApp(name: button.tabName, bundleIdentifier: button.bundleIdentifier)
+            let appName = name ?? WindowManager.runningApp(bundleIdentifier)?.localizedName ?? bundleIdentifier
+            placeRunningApp(name: appName, bundleIdentifier: bundleIdentifier)
         }
     }
 
@@ -422,14 +430,29 @@ final class TabStripController: NSObject, NSWindowDelegate {
     }
 
     func selectRelative(offset: Int) {
-        guard isWorkspaceFront else {
-            Log.line("ignored tab hotkey while another app is foregrounded")
-            return
+        let liveOrder = recentAppIDs.filter { WindowManager.runningApp($0) != nil }
+        let restart = cycleResetWork == nil
+        guard let bundleIdentifier = runningAppCycle.next(
+            liveOrder: liveOrder,
+            current: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            offset: offset,
+            restart: restart
+        ) else { return }
+
+        cycleResetWork?.cancel()
+        let reset = DispatchWorkItem { [weak self] in
+            self?.runningAppCycle.reset()
+            self?.cycleResetWork = nil
         }
-        guard let index = relativeTabIndex(activeIndex: activeIndex,
-                                           tabCount: workspace.tabs.count,
-                                           offset: offset) else { return }
-        select(index: index)
+        cycleResetWork = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.25, execute: reset)
+        selectRunningApp(bundleIdentifier: bundleIdentifier)
+    }
+
+    private func resetRunningAppCycle() {
+        cycleResetWork?.cancel()
+        cycleResetWork = nil
+        runningAppCycle.reset()
     }
 
     @objc private func addClicked() { addApplication() }

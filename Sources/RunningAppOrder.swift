@@ -19,3 +19,30 @@ func runningAppOrder(eligible: [String], previous: [String], activated: String? 
     order.append(contentsOf: eligible.filter { !retained.contains($0) })
     return order
 }
+
+/// A stable view of the MRU list for one burst of shortcut presses.
+///
+/// Activating an app immediately promotes it in the live MRU list. Cycling over
+/// that changing list would bounce between two apps, so a burst keeps its starting
+/// order until the controller resets it after a short pause.
+struct RunningAppCycle {
+    private var snapshot: [String] = []
+    private var index: Int?
+
+    mutating func next(liveOrder: [String], current: String?, offset: Int,
+                       restart: Bool) -> String? {
+        if restart || snapshot.isEmpty {
+            snapshot = liveOrder
+            index = current.flatMap { snapshot.firstIndex(of: $0) }
+        }
+        guard let next = relativeTabIndex(activeIndex: index, tabCount: snapshot.count,
+                                          offset: offset) else { return nil }
+        index = next
+        return snapshot[next]
+    }
+
+    mutating func reset() {
+        snapshot.removeAll()
+        index = nil
+    }
+}
