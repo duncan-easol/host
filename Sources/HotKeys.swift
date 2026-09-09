@@ -8,7 +8,7 @@ import Carbon.HIToolbox
 /// also receive the keystroke. RegisterEventHotKey swallows the event, and it
 /// works from an accessory app that never becomes active.
 ///
-/// Host only claims Command-Shift-[ and Command-Shift-]. Option-digit combinations
+/// Host only claims Option-Shift-[ and Option-Shift-]. Option-digit combinations
 /// remain available for text input, including Option-3 for `#`.
 final class HotKeyCenter {
     static let shared = HotKeyCenter()
@@ -16,16 +16,33 @@ final class HotKeyCenter {
     private var handlers: [UInt32: () -> Void] = [:]
     private var refs: [EventHotKeyRef?] = []
     private var handlerInstalled = false
+    private var globalModifierMonitor: Any?
+    private var localModifierMonitor: Any?
 
     private init() {}
 
-    func registerCommandShiftBrackets(previous: @escaping () -> Void,
-                                      next: @escaping () -> Void) {
-        let modifiers = UInt32(cmdKey | shiftKey)
+    func registerOptionShiftBrackets(previous: @escaping () -> Void,
+                                     next: @escaping () -> Void,
+                                     commit: @escaping () -> Void) {
+        let modifiers = UInt32(optionKey | shiftKey)
         register(keyCode: UInt32(kVK_ANSI_LeftBracket), modifiers: modifiers,
                  id: 100, handler: previous)
         register(keyCode: UInt32(kVK_ANSI_RightBracket), modifiers: modifiers,
                  id: 101, handler: next)
+
+        let modifierChanged: (NSEvent) -> Void = { event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard !flags.contains([.option, .shift]) else { return }
+            DispatchQueue.main.async(execute: commit)
+        }
+        globalModifierMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: .flagsChanged,
+            handler: modifierChanged
+        )
+        localModifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            modifierChanged(event)
+            return event
+        }
     }
 
     func register(keyCode: UInt32, modifiers: UInt32, id: UInt32, handler: @escaping () -> Void) {
@@ -47,6 +64,10 @@ final class HotKeyCenter {
         for ref in refs where ref != nil { UnregisterEventHotKey(ref!) }
         refs.removeAll()
         handlers.removeAll()
+        if let monitor = globalModifierMonitor { NSEvent.removeMonitor(monitor) }
+        if let monitor = localModifierMonitor { NSEvent.removeMonitor(monitor) }
+        globalModifierMonitor = nil
+        localModifierMonitor = nil
     }
 
     fileprivate func fire(_ id: UInt32) {

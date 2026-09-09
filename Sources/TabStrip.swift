@@ -92,7 +92,6 @@ final class TabStripController: NSObject, NSWindowDelegate {
     private var buttons: [TabButton] = []
     private var recentAppIDs: [String] = []
     private var runningAppCycle = RunningAppCycle()
-    private var cycleResetWork: DispatchWorkItem?
     private(set) var activeIndex: Int?
 
     init(workspace: Workspace) {
@@ -435,28 +434,26 @@ final class TabStripController: NSObject, NSWindowDelegate {
     }
 
     func selectRelative(offset: Int) {
+        previewRelative(offset: offset)
+        commitRunningAppCycle()
+    }
+
+    func previewRelative(offset: Int) {
         let liveOrder = recentAppIDs.filter { WindowManager.runningApp($0) != nil }
-        let restart = cycleResetWork == nil
-        guard let bundleIdentifier = runningAppCycle.next(
+        guard let bundleIdentifier = runningAppCycle.preview(
             liveOrder: liveOrder,
             current: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
-            offset: offset,
-            restart: restart
+            offset: offset
         ) else { return }
+        highlight(bundleIdentifier)
+    }
 
-        cycleResetWork?.cancel()
-        let reset = DispatchWorkItem { [weak self] in
-            self?.runningAppCycle.reset()
-            self?.cycleResetWork = nil
-        }
-        cycleResetWork = reset
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.25, execute: reset)
+    func commitRunningAppCycle() {
+        guard let bundleIdentifier = runningAppCycle.commit() else { return }
         selectRunningApp(bundleIdentifier: bundleIdentifier)
     }
 
     private func resetRunningAppCycle() {
-        cycleResetWork?.cancel()
-        cycleResetWork = nil
         runningAppCycle.reset()
     }
 

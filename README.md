@@ -15,8 +15,9 @@ Then grant Accessibility, click a tab, and run **Tabs › Run Self-test**.
 A floating, non-activating strip at the top of a workspace rectangle. The header
 shows every regular running app in most-recently-used order, like Command-Tab made
 permanent. Clicking any app moves its main window into the rectangle below the
-strip and raises it. `⌘⇧[` and `⌘⇧]` cycle through the running apps in MRU order,
-wrapping at either end.
+strip and raises it. Hold `⌥⇧` and use `[` or `]` to preview running apps in MRU
+order. Releasing either modifier switches to the highlighted app, wrapping at
+either end.
 The newest apps keep labelled tabs. Older apps use compact icon buttons so the
 full list fits in the header. Activating a compact app promotes it into a labelled
 slot and collapses the oldest labelled app. Every button shows the app name when

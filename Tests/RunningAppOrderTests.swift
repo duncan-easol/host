@@ -19,16 +19,17 @@ struct RunningAppOrderTests {
         assert(labelledRunningAppIDs(order: ["mail"], limit: 0).isEmpty)
 
         var cycle = RunningAppCycle()
-        assert(cycle.next(liveOrder: ["mail", "notes", "music"], current: "mail",
-                          offset: 1, restart: true) == "notes")
-        // The live order changes after Notes activates, but this burst continues
-        // through the original snapshot instead of returning to Mail.
-        assert(cycle.next(liveOrder: ["notes", "mail", "music"], current: "notes",
-                          offset: 1, restart: false) == "music")
-        assert(cycle.next(liveOrder: ["music", "notes", "mail"], current: "music",
-                          offset: 1, restart: false) == "mail")
-        cycle.reset()
-        assert(cycle.next(liveOrder: ["music", "notes", "mail"], current: "music",
-                          offset: -1, restart: true) == "mail")
+        assert(cycle.preview(liveOrder: ["mail", "notes", "music"], current: "mail",
+                             offset: 1) == "notes")
+        // Previewing does not commit. Further presses continue through the stable
+        // snapshot even if the live MRU order changes underneath it.
+        assert(cycle.preview(liveOrder: ["notes", "mail", "music"], current: "mail",
+                             offset: 1) == "music")
+        assert(cycle.preview(liveOrder: ["music", "notes", "mail"], current: "mail",
+                             offset: -1) == "notes")
+        assert(cycle.commit() == "notes")
+        assert(cycle.commit() == nil)
+        assert(cycle.preview(liveOrder: ["music", "notes", "mail"], current: "music",
+                             offset: -1) == "mail")
     }
 }

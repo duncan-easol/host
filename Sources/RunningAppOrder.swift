@@ -25,29 +25,38 @@ func labelledRunningAppIDs(order: [String], limit: Int) -> Set<String> {
     Set(order.prefix(max(0, limit)))
 }
 
-/// A stable view of the MRU list for one burst of shortcut presses.
+/// A stable view of the MRU list while the shortcut modifiers are held.
 ///
-/// Activating an app immediately promotes it in the live MRU list. Cycling over
-/// that changing list would bounce between two apps, so a burst keeps its starting
-/// order until the controller resets it after a short pause.
+/// The highlighted app is only returned for activation when the modifiers are
+/// released, so repeated bracket presses can move in either direction first.
 struct RunningAppCycle {
     private var snapshot: [String] = []
     private var index: Int?
+    private var pending: String?
 
-    mutating func next(liveOrder: [String], current: String?, offset: Int,
-                       restart: Bool) -> String? {
-        if restart || snapshot.isEmpty {
+    var isActive: Bool { pending != nil }
+
+    mutating func preview(liveOrder: [String], current: String?, offset: Int) -> String? {
+        if snapshot.isEmpty {
             snapshot = liveOrder
             index = current.flatMap { snapshot.firstIndex(of: $0) }
         }
         guard let next = relativeTabIndex(activeIndex: index, tabCount: snapshot.count,
                                           offset: offset) else { return nil }
         index = next
-        return snapshot[next]
+        pending = snapshot[next]
+        return pending
+    }
+
+    mutating func commit() -> String? {
+        let selected = pending
+        reset()
+        return selected
     }
 
     mutating func reset() {
         snapshot.removeAll()
         index = nil
+        pending = nil
     }
 }

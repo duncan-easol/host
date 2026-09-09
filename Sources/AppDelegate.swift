@@ -136,12 +136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func registerHotKeys() {
         HotKeyCenter.shared.unregisterAll()
-        HotKeyCenter.shared.registerCommandShiftBrackets(
-            previous: { [weak self] in self?.strip.selectRelative(offset: -1) },
-            next: { [weak self] in self?.strip.selectRelative(offset: 1) }
+        HotKeyCenter.shared.registerOptionShiftBrackets(
+            previous: { [weak self] in self?.strip.previewRelative(offset: -1) },
+            next: { [weak self] in self?.strip.previewRelative(offset: 1) },
+            commit: { [weak self] in self?.strip.commitRunningAppCycle() }
         )
         rebuildTabsMenu()
-        Log.line("hotkeys: command-shift-[ and command-shift-]")
+        Log.line("hotkeys: option-shift-[ and option-shift-]")
     }
 
     /// Clicking the Dock icon brings the whole workspace back, not just the strip.
@@ -240,11 +241,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
         let previous = NSMenuItem(title: "Previous Application", action: #selector(previousTab), keyEquivalent: "[")
-        previous.keyEquivalentModifierMask = [.command, .shift]
+        previous.keyEquivalentModifierMask = [.option, .shift]
         previous.target = self
         menu.addItem(previous)
         let next = NSMenuItem(title: "Next Application", action: #selector(nextTab), keyEquivalent: "]")
-        next.keyEquivalentModifierMask = [.command, .shift]
+        next.keyEquivalentModifierMask = [.option, .shift]
         next.target = self
         menu.addItem(next)
         menu.addItem(.separator())
