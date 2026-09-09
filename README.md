@@ -12,10 +12,19 @@ Then grant Accessibility, click a tab, and run **Tabs › Run Self-test**.
 
 ## What it does
 
-A floating, non-activating strip at the top of a workspace rectangle. Clicking a
-tab launches the app if needed, finds its main window, moves it into the rectangle
-below the strip, and raises it. `⌥⇧[` and `⌥⇧]` move to the previous and next
-apps, wrapping at either end.
+A floating, non-activating strip at the top of a workspace rectangle. The header
+shows every regular running app in most-recently-used order, like Command-Tab made
+permanent. Clicking any app moves its main window into the rectangle below the
+strip and raises it. Hold `⌥⇧` and use `[` or `]` to preview running apps in MRU
+order. Releasing either modifier switches to the highlighted app, wrapping at
+either end.
+The settings window has an optional **Replace Command-Tab** switch. When enabled,
+`⌘Tab` and `⌘⇧Tab` preview the same list and releasing Command switches apps. If
+macOS cannot install the event filter, its normal app switcher remains in place.
+The newest apps keep labelled tabs. Older apps use compact icon buttons so the
+full list fits in the header. Activating a compact app promotes it into a labelled
+slot and collapses the oldest labelled app. Every button shows the app name when
+you hover over it.
 
 - `+` adds an app from `/Applications`, persisted to
   `~/Library/Application Support/Host/workspace.json`. The new tab is selected
@@ -23,8 +32,8 @@ apps, wrapping at either end.
   then. Adding an app that is already a tab selects the existing one rather than
   creating a second — tabs are keyed by bundle id throughout, so duplicates would
   fight over the same bound window and geometry state.
-- Right-click a tab to remove it. The app keeps running and its window stays put
-  — removing a tab is forgetting about an app, not closing it
+- Right-click a hosted app to stop hosting it. The app stays in the running-app
+  header until it quits, and its window stays put
 - Quitting an app closes its tab and moves you to the next tab that is still
   running. A tab lasts as long as its app does, so the strip is a view of what is
   running rather than a standing set of apps you curate — quit something, add it
@@ -38,8 +47,6 @@ apps, wrapping at either end.
   everything else onto the screen with it.
 - Show Desktop sweeps the strip aside with the hosted windows and restores them
   together.
-- Drag a tab along the strip to reorder it; the order and the hotkey bindings
-  follow
 - The **cog** at the right of the strip opens settings: pick the tab bar theme
   and the app icon from 33 themes. The set includes stripes, gradients, night
   skies, scattered dots, packed circles, irregular meshes, watercolour washes,
@@ -115,9 +122,10 @@ Left at that level it would also sit on top of every unrelated window on screen.
 Lowering the level permanently is no good either -- it would be buried under the
 very window it belongs to.
 
-So the level follows the frontmost app: floating while a hosted app is in front,
-normal otherwise. It stays on screen throughout, and any other window is free to
-cover it. Ordering it out was the first attempt at this and overshot: the strip
+So the strip floats while any regular running app is in front. That keeps the
+switcher visible as a permanent fixture. It drops to the normal window level only
+for accessory or background processes, which do not appear in the header.
+Ordering it out was the first attempt at this and overshot: the strip
 vanished the moment a hosted app lost focus, which made the workspace look like
 it had gone away.
 

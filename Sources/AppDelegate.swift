@@ -137,9 +137,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func registerHotKeys() {
         HotKeyCenter.shared.unregisterAll()
         HotKeyCenter.shared.registerOptionShiftBrackets(
-            previous: { [weak self] in self?.strip.selectRelative(offset: -1) },
-            next: { [weak self] in self?.strip.selectRelative(offset: 1) }
+            previous: { [weak self] in self?.strip.previewRelative(offset: -1) },
+            next: { [weak self] in self?.strip.previewRelative(offset: 1) },
+            commit: { [weak self] in self?.strip.commitRunningAppCycle() }
         )
+        if CommandTabOverride.isEnabled {
+            let active = HotKeyCenter.shared.replaceCommandTab(
+                previous: { [weak self] in self?.strip.previewRelative(offset: -1) },
+                next: { [weak self] in self?.strip.previewRelative(offset: 1) },
+                commit: { [weak self] in self?.strip.commitRunningAppCycle() }
+            )
+            Log.line("command-tab override: \(active ? "active" : "unavailable")")
+        }
         rebuildTabsMenu()
         Log.line("hotkeys: option-shift-[ and option-shift-]")
     }

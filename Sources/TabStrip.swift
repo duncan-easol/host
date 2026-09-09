@@ -56,6 +56,8 @@ final class TabButton: NSButton {
     var bundleIdentifier = ""
     var tabName = ""
     var tabIcon: NSImage?
+    var workspaceIndex: Int?
+    var showsLabel = false
     var onDragMoved: ((TabButton, CGPoint) -> Void)?
     var onDragEnded: ((TabButton) -> Void)?
 
@@ -88,6 +90,8 @@ final class TabStripController: NSObject, NSWindowDelegate {
     private let stack = NSStackView()
     private let cog = NSButton()
     private var buttons: [TabButton] = []
+    private var recentAppIDs: [String] = []
+    private var runningAppCycle = RunningAppCycle()
     private(set) var activeIndex: Int?
 
     init(workspace: Workspace) {
@@ -149,6 +153,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(appDidTerminate(_:)),
             name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        recentAppIDs = initialRunningApps().compactMap(\.bundleIdentifier)
         rebuild()
     }
 
@@ -158,27 +163,38 @@ final class TabStripController: NSObject, NSWindowDelegate {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         buttons.removeAll()
 
-        for (index, tab) in workspace.tabs.enumerated() {
-            let button = TabButton(title: "", target: self, action: #selector(tabClicked(_:)))
-            button.tag = index
-            button.bundleIdentifier = tab.bundleIdentifier
-            button.tabName = tab.name
-            button.tabIcon = tab.icon
-            button.onDragMoved = { [weak self] b, point in self?.dragTab(b, to: point) }
-            button.onDragEnded = { [weak self] _ in self?.commitTabOrder() }
-            style(button, title: tab.name)
-            button.toolTip = "\(tab.bundleIdentifier)   (option-\(index + 1))"
+        let runningApps = orderedRunningApps()
+        let labelLimit = max(1, min(workspace.tabs.count, runningApps.count))
+        let labelledIDs = labelledRunningAppIDs(order: recentAppIDs, limit: labelLimit)
 
-            // Right-click to remove. Deliberately not a hotkey and not an always
-            // visible close button: tabs here are a persistent workspace rather
-            // than transient documents, so removing one should take effort.
-            let menu = NSMenu()
-            let remove = NSMenuItem(title: "Remove \u{201C}\(tab.name)\u{201D}",
-                                    action: #selector(removeTab(_:)), keyEquivalent: "")
-            remove.target = self
-            remove.tag = index
-            menu.addItem(remove)
-            button.menu = menu
+        for app in runningApps {
+            guard let id = app.bundleIdentifier else { continue }
+            let name = app.localizedName ?? id
+            let workspaceIndex = workspace.tabs.firstIndex { $0.bundleIdentifier == id }
+            let button = TabButton(title: "", target: self, action: #selector(tabClicked(_:)))
+            button.bundleIdentifier = id
+            button.tabName = name
+            button.tabIcon = app.icon
+            button.workspaceIndex = workspaceIndex
+            button.showsLabel = labelledIDs.contains(id)
+            if button.showsLabel {
+                style(button, title: name)
+            } else {
+                styleRunningApp(button)
+            }
+            button.toolTip = name
+
+            if let workspaceIndex {
+                // Right-click removes the app from the managed workspace. It stays
+                // in this running-app list until the app itself quits.
+                let menu = NSMenu()
+                let remove = NSMenuItem(title: "Stop Hosting \u{201C}\(name)\u{201D}",
+                                        action: #selector(removeTab(_:)), keyEquivalent: "")
+                remove.target = self
+                remove.tag = workspaceIndex
+                menu.addItem(remove)
+                button.menu = menu
+            }
 
             stack.addArrangedSubview(button)
             buttons.append(button)
@@ -188,7 +204,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
                                action: #selector(addClicked))
         stack.addArrangedSubview(add)
 
-        highlight(activeIndex)
+        highlight(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
         cog.layer?.backgroundColor = Theme.current.chip.withAlphaComponent(0.55).cgColor
         cog.contentTintColor = Theme.current.text
@@ -255,6 +271,23 @@ final class TabStripController: NSObject, NSWindowDelegate {
         ])
     }
 
+    /// Older MRU entries use the compact icon treatment from Command-Tab.
+    private func styleRunningApp(_ button: TabButton) {
+        button.isBordered = false
+        button.setButtonType(.momentaryChange)
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 8
+        button.layer?.backgroundColor = Theme.current.chip.cgColor
+        button.image = (button.tabIcon?.copy() as? NSImage) ?? button.tabIcon
+        button.image?.size = NSSize(width: 18, height: 18)
+        button.imagePosition = .imageOnly
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 30),
+            button.heightAnchor.constraint(equalToConstant: 26),
+        ])
+    }
+
     /// Icon and name as one attributed string, with the icon as a text attachment.
     ///
     /// NSButton's own image-plus-title layout puts a gap between the two that it
@@ -290,12 +323,14 @@ final class TabStripController: NSObject, NSWindowDelegate {
     private func applyChip(_ button: TabButton, active: Bool) {
         button.layer?.backgroundColor = Theme.current.chip.cgColor
         button.alphaValue = active ? 1 : 0.52
-        button.attributedTitle = Self.tabTitle(button.tabName, icon: button.tabIcon, active: active)
+        if button.showsLabel {
+            button.attributedTitle = Self.tabTitle(button.tabName, icon: button.tabIcon, active: active)
+        }
     }
 
-    private func highlight(_ index: Int?) {
-        for (i, button) in buttons.enumerated() {
-            applyChip(button, active: i == index)
+    private func highlight(_ bundleIdentifier: String?) {
+        for button in buttons {
+            applyChip(button, active: button.bundleIdentifier == bundleIdentifier)
         }
     }
 
@@ -309,7 +344,50 @@ final class TabStripController: NSObject, NSWindowDelegate {
     // MARK: - Actions
 
     @objc private func tabClicked(_ sender: NSButton) {
-        select(index: sender.tag)
+        guard let button = sender as? TabButton else { return }
+        resetRunningAppCycle()
+        selectRunningApp(bundleIdentifier: button.bundleIdentifier, name: button.tabName)
+    }
+
+    private func selectRunningApp(bundleIdentifier: String, name: String? = nil) {
+        if let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
+            select(index: index)
+        } else {
+            let appName = name ?? WindowManager.runningApp(bundleIdentifier)?.localizedName ?? bundleIdentifier
+            placeRunningApp(name: appName, bundleIdentifier: bundleIdentifier)
+        }
+    }
+
+    private func placeRunningApp(name: String, bundleIdentifier: String) {
+        guard AXPermission.isTrusted else {
+            AppDelegate.shared?.nagAboutPermission()
+            return
+        }
+        guard WindowManager.runningApp(bundleIdentifier) != nil else {
+            refreshRunningApps()
+            return
+        }
+        highlight(bundleIdentifier)
+        isWorkspaceFront = true
+        panel.level = .floating
+        panel.orderFrontRegardless()
+
+        if #available(macOS 14.0, *) {
+            NSApp.yieldActivation(toApplicationWithBundleIdentifier: bundleIdentifier)
+        }
+
+        WindowManager.shared.place(bundleID: bundleIdentifier, in: workspace.contentFrame) { result in
+            if let error = result.error {
+                Log.line("FAILED \(name): \(error)")
+                return
+            }
+            let drift = result.drift.map { String(format: "%.0fpt", $0) } ?? "unknown"
+            Log.line(String(format: "%@ placed from running-app header (waited %.2fs, drift %@)",
+                            name, result.waitedForWindow, drift))
+            Log.line("  requested(ax) \(NSStringFromRect(result.requested))")
+            Log.line("  actual(ax)    \(NSStringFromRect(result.actual ?? .zero))")
+            self.showStripIfAppropriate()
+        }
     }
 
     func select(index: Int) {
@@ -321,7 +399,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         let tab = workspace.tabs[index]
         activeIndex = index
         rememberActiveTab(index: index)
-        highlight(index)
+        highlight(tab.bundleIdentifier)
         isWorkspaceFront = true
         panel.level = .floating
         panel.orderFrontRegardless()   // may have been hidden with the workspace
@@ -356,14 +434,27 @@ final class TabStripController: NSObject, NSWindowDelegate {
     }
 
     func selectRelative(offset: Int) {
-        guard isWorkspaceFront else {
-            Log.line("ignored tab hotkey while another app is foregrounded")
-            return
-        }
-        guard let index = relativeTabIndex(activeIndex: activeIndex,
-                                           tabCount: workspace.tabs.count,
-                                           offset: offset) else { return }
-        select(index: index)
+        previewRelative(offset: offset)
+        commitRunningAppCycle()
+    }
+
+    func previewRelative(offset: Int) {
+        let liveOrder = recentAppIDs.filter { WindowManager.runningApp($0) != nil }
+        guard let bundleIdentifier = runningAppCycle.preview(
+            liveOrder: liveOrder,
+            current: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            offset: offset
+        ) else { return }
+        highlight(bundleIdentifier)
+    }
+
+    func commitRunningAppCycle() {
+        guard let bundleIdentifier = runningAppCycle.commit() else { return }
+        selectRunningApp(bundleIdentifier: bundleIdentifier)
+    }
+
+    private func resetRunningAppCycle() {
+        runningAppCycle.reset()
     }
 
     @objc private func addClicked() { addApplication() }
@@ -563,22 +654,74 @@ final class TabStripController: NSObject, NSWindowDelegate {
         UserDefaults.standard.set(workspace.tabs[index].bundleIdentifier, forKey: Self.activeTabKey)
     }
 
+    // MARK: - Running applications
+
+    /// Command-Tab includes regular applications, including hidden ones. Helper,
+    /// accessory, and background processes do not belong in the header.
+    private func eligibleRunningApps() -> [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications.filter {
+            !$0.isTerminated && $0.activationPolicy == .regular && $0.bundleIdentifier != nil
+        }
+    }
+
+    /// Seed the first MRU order from visible window z-order. macOS does not expose
+    /// Command-Tab's stored order, so this is the closest public starting point.
+    private func initialRunningApps() -> [NSRunningApplication] {
+        let apps = eligibleRunningApps()
+        let byPID = Dictionary(uniqueKeysWithValues: apps.map { ($0.processIdentifier, $0) })
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                 kCGNullWindowID) as? [[String: Any]] ?? []
+        var ordered: [NSRunningApplication] = []
+        var seen = Set<pid_t>()
+        for window in windows {
+            guard let number = window[kCGWindowOwnerPID as String] as? NSNumber else { continue }
+            let pid = pid_t(number.int32Value)
+            if let app = byPID[pid], seen.insert(pid).inserted { ordered.append(app) }
+        }
+        ordered.append(contentsOf: apps.filter { seen.insert($0.processIdentifier).inserted })
+        return ordered
+    }
+
+    private func orderedRunningApps() -> [NSRunningApplication] {
+        let apps = eligibleRunningApps()
+        let byID = Dictionary(apps.compactMap { app in
+            app.bundleIdentifier.map { ($0, app) }
+        }, uniquingKeysWith: { first, _ in first })
+        recentAppIDs = runningAppOrder(eligible: apps.compactMap(\.bundleIdentifier),
+                                       previous: recentAppIDs)
+        return recentAppIDs.compactMap { byID[$0] }
+    }
+
+    private func refreshRunningApps(promoting bundleIdentifier: String? = nil) {
+        let eligible = eligibleRunningApps().compactMap(\.bundleIdentifier)
+        let updated = runningAppOrder(eligible: eligible, previous: recentAppIDs,
+                                      activated: bundleIdentifier)
+        guard updated != recentAppIDs else {
+            highlight(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+            return
+        }
+        recentAppIDs = updated
+        rebuild()
+    }
+
     // MARK: - Quitting
 
     /// A hosted app can quit without removing its tab. Its bundle ID remains the
     /// attachment point, so the next launch can restore the app to the workspace.
     @objc private func appDidTerminate(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              let id = app.bundleIdentifier,
-              workspace.tabs.contains(where: { $0.bundleIdentifier == id }) else { return }
+              let id = app.bundleIdentifier else { return }
+        refreshRunningApps()
+        guard workspace.tabs.contains(where: { $0.bundleIdentifier == id }) else { return }
         WindowManager.shared.forget(bundleID: id)
         Log.line("\(id) quit; keeping its tab for automatic reattachment")
     }
 
     @objc private func appDidLaunch(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              let id = app.bundleIdentifier,
-              let tab = workspace.tabs.first(where: { $0.bundleIdentifier == id }) else { return }
+              let id = app.bundleIdentifier else { return }
+        refreshRunningApps()
+        guard let tab = workspace.tabs.first(where: { $0.bundleIdentifier == id }) else { return }
         Log.line("\(tab.name) relaunched; reattaching to workspace")
         WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame, reason: "relaunched")
     }
@@ -645,8 +788,9 @@ final class TabStripController: NSObject, NSWindowDelegate {
     @objc private func appDidActivate(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let id = app.bundleIdentifier
+        refreshRunningApps(promoting: id)
         let ours = id == Bundle.main.bundleIdentifier
-            || workspace.tabs.contains { $0.bundleIdentifier == id }
+            || id.map { recentAppIDs.contains($0) } == true
 
         // Keep the highlight on whatever tab is genuinely frontmost, including when
         // you reach it with command-tab rather than by clicking. This is the only
@@ -654,7 +798,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         if let id, let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == id }) {
             activeIndex = index
             rememberActiveTab(index: index)
-            highlight(index)
+            highlight(id)
             // Reached without clicking its tab, so nothing has sized it. Snapping
             // here is what stops a tab being active while its window sits at
             // whatever size the app itself last decided on.
@@ -664,7 +808,9 @@ final class TabStripController: NSObject, NSWindowDelegate {
         guard ours != isWorkspaceFront else { return }
         isWorkspaceFront = ours
 
-        // The strip stays on screen either way; what changes is whether it floats.
+        // Regular apps all belong to the switcher now, so the strip floats above
+        // them as a permanent fixture. It only drops behind accessory and
+        // background processes that are absent from the header.
         //
         // Ordering it out was the first answer to "stop sitting on top of Firefox"
         // and it overshot: the strip vanished the moment a hosted app lost focus,
