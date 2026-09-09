@@ -149,6 +149,10 @@ final class HotKeyCenter {
         }
     }
 
+    func registerControlP(handler: @escaping () -> Void) {
+        register(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(controlKey), id: 102, handler: handler)
+    }
+
     func replaceCommandTab(previous: @escaping () -> Void,
                            next: @escaping () -> Void,
                            commit: @escaping () -> Void) -> Bool {

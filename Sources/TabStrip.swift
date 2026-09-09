@@ -27,7 +27,7 @@ final class TabStripPanel: NSPanel {
         hasShadow = true
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
 
@@ -44,6 +44,14 @@ final class ThemeBarView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         AppDelegate.shared?.applyApplicationIcon(for: effectiveAppearance)
+    }
+}
+
+private final class RunningAppSearchField: NSSearchField {
+    var onCancel: (() -> Void)?
+
+    override func cancelOperation(_ sender: Any?) {
+        onCancel?()
     }
 }
 
@@ -84,7 +92,7 @@ final class TabButton: NSButton {
     }
 }
 
-final class TabStripController: NSObject, NSWindowDelegate {
+final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     private(set) var workspace: Workspace
     private let panel: TabStripPanel
     private let stack = NSStackView()
@@ -92,6 +100,8 @@ final class TabStripController: NSObject, NSWindowDelegate {
     private var buttons: [TabButton] = []
     private var recentAppIDs: [String] = []
     private var runningAppCycle = RunningAppCycle()
+    private var searchField: RunningAppSearchField!
+    private var searchQuery = ""
     private(set) var activeIndex: Int?
 
     init(workspace: Workspace) {
@@ -111,7 +121,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         cog.layer?.cornerRadius = 8
         cog.target = self
         cog.action = #selector(cogClicked)
-        cog.toolTip = "Theme and app icon"
+        cog.toolTip = "Tab bar theme"
         cog.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(cog)
         NSLayoutConstraint.activate([
@@ -119,6 +129,22 @@ final class TabStripController: NSObject, NSWindowDelegate {
             cog.centerYAnchor.constraint(equalTo: background.centerYAnchor),
             cog.widthAnchor.constraint(equalToConstant: 30),
             cog.heightAnchor.constraint(equalToConstant: 26),
+        ])
+
+        searchField = RunningAppSearchField()
+        searchField.placeholderString = "Find running app"
+        searchField.target = self
+        searchField.action = #selector(searchSubmitted(_:))
+        searchField.delegate = self
+        searchField.isHidden = true
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        searchField.onCancel = { [weak self] in self?.closeRunningAppSearch() }
+        background.addSubview(searchField)
+        NSLayoutConstraint.activate([
+            searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
+            searchField.trailingAnchor.constraint(equalTo: cog.leadingAnchor, constant: -12),
+            searchField.centerYAnchor.constraint(equalTo: background.centerYAnchor),
+            searchField.heightAnchor.constraint(equalToConstant: 28),
         ])
 
         stack.orientation = .horizontal
@@ -167,7 +193,10 @@ final class TabStripController: NSObject, NSWindowDelegate {
         let labelLimit = max(1, min(workspace.tabs.count, runningApps.count))
         let labelledIDs = labelledRunningAppIDs(order: recentAppIDs, limit: labelLimit)
 
-        for app in runningApps {
+        let visibleApps = searchQuery.isEmpty ? runningApps : runningApps.filter {
+            ($0.localizedName ?? "").localizedCaseInsensitiveContains(searchQuery)
+        }
+        for app in visibleApps {
             guard let id = app.bundleIdentifier else { continue }
             let name = app.localizedName ?? id
             let workspaceIndex = workspace.tabs.firstIndex { $0.bundleIdentifier == id }
@@ -193,6 +222,11 @@ final class TabStripController: NSObject, NSWindowDelegate {
                 remove.target = self
                 remove.tag = workspaceIndex
                 menu.addItem(remove)
+                let detach = NSMenuItem(title: workspace.tabs[workspaceIndex].isDetached ? "Attach to Workspace" : "Detach from Workspace",
+                                        action: #selector(toggleDetached(_:)), keyEquivalent: "")
+                detach.target = self
+                detach.tag = workspaceIndex
+                menu.addItem(detach)
                 button.menu = menu
             }
 
@@ -208,6 +242,48 @@ final class TabStripController: NSObject, NSWindowDelegate {
 
         cog.layer?.backgroundColor = Theme.current.chip.withAlphaComponent(0.55).cgColor
         cog.contentTintColor = Theme.current.text
+    }
+
+    func toggleRunningAppSearch() {
+        if searchField.isHidden {
+            searchQuery = ""
+            searchField.stringValue = ""
+            searchField.isHidden = false
+            stack.isHidden = true
+            cog.isHidden = true
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            searchField.becomeFirstResponder()
+        } else {
+            closeRunningAppSearch()
+        }
+    }
+
+    private func closeRunningAppSearch() {
+        searchQuery = ""
+        searchField.stringValue = ""
+        searchField.resignFirstResponder()
+        searchField.isHidden = true
+        stack.isHidden = false
+        cog.isHidden = false
+        panel.orderFrontRegardless()
+        rebuild()
+    }
+
+    @objc private func searchSubmitted(_ sender: NSSearchField) {
+        guard let app = orderedRunningApps().first(where: {
+            ($0.localizedName ?? "").localizedCaseInsensitiveContains(sender.stringValue)
+        }), let id = app.bundleIdentifier else { return }
+        let name = app.localizedName ?? id
+        closeRunningAppSearch()
+        selectRunningApp(bundleIdentifier: id, name: name)
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSSearchField, field === searchField else { return }
+        searchQuery = field.stringValue
+        rebuild()
+        searchField.becomeFirstResponder()
     }
 
     @objc private func cogClicked() {
@@ -404,6 +480,11 @@ final class TabStripController: NSObject, NSWindowDelegate {
         panel.level = .floating
         panel.orderFrontRegardless()   // may have been hidden with the workspace
 
+        if tab.isDetached {
+            WindowManager.runningApp(tab.bundleIdentifier)?.activate(options: [.activateIgnoringOtherApps])
+            return
+        }
+
         // Hand over activation rights before asking. Cheap, main-thread, and works
         // whether or not the target app is running yet.
         if #available(macOS 14.0, *) {
@@ -514,6 +595,15 @@ final class TabStripController: NSObject, NSWindowDelegate {
         Log.line("removed \(removed.name) -- the app is still running, window left in place")
     }
 
+    @objc private func toggleDetached(_ sender: NSMenuItem) {
+        guard workspace.tabs.indices.contains(sender.tag) else { return }
+        workspace.tabs[sender.tag].isDetached.toggle()
+        Store.save(workspace)
+        rebuild()
+        Log.line("\(workspace.tabs[sender.tag].name) " +
+                 (workspace.tabs[sender.tag].isDetached ? "detached from" : "attached to") + " workspace")
+    }
+
     // MARK: - Moving the workspace
 
     func windowDidMove(_ notification: Notification) {
@@ -556,6 +646,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         syncWork?.cancel()
         let content = workspace.contentFrame
         for tab in workspace.tabs {
+            guard !tab.isDetached else { continue }
             WindowManager.shared.snap(bundleID: tab.bundleIdentifier, in: content,
                                       reason: "workspace moved")
         }
@@ -568,6 +659,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
             guard let self else { return }
             let content = self.workspace.contentFrame
             for tab in self.workspace.tabs {
+                guard !tab.isDetached else { continue }
                 WindowManager.shared.snap(bundleID: tab.bundleIdentifier, in: content,
                                           reason: "workspace moved")
             }
@@ -723,6 +815,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         refreshRunningApps()
         guard let tab = workspace.tabs.first(where: { $0.bundleIdentifier == id }) else { return }
         Log.line("\(tab.name) relaunched; reattaching to workspace")
+        guard !tab.isDetached else { return }
         WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame, reason: "relaunched")
     }
 
@@ -802,6 +895,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
             // Reached without clicking its tab, so nothing has sized it. Snapping
             // here is what stops a tab being active while its window sits at
             // whatever size the app itself last decided on.
+            guard !workspace.tabs[index].isDetached else { return }
             WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame)
         }
 
@@ -841,7 +935,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         guard !isBulkHiding,
               let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let id = app.bundleIdentifier,
-              workspace.tabs.contains(where: { $0.bundleIdentifier == id }) else { return }
+              workspace.tabs.contains(where: { $0.bundleIdentifier == id && !$0.isDetached }) else { return }
 
         isBulkHiding = true
         AppDelegate.shared?.holdWorkspaceForHide()
@@ -871,7 +965,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         guard !isBulkHiding,
               let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let id = app.bundleIdentifier,
-              workspace.tabs.contains(where: { $0.bundleIdentifier == id }) else { return }
+              workspace.tabs.contains(where: { $0.bundleIdentifier == id && !$0.isDetached }) else { return }
         // Only the strip comes back, not every app: unhiding one tab should not
         // drag the other four onto the screen with it.
         //
@@ -895,6 +989,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
     func followWindow(bundleID: String, content: CGRect) {
         guard let active = activeIndex, active < workspace.tabs.count,
               workspace.tabs[active].bundleIdentifier == bundleID else { return }
+        guard !workspace.tabs[active].isDetached else { return }
         guard !isSyncingStrip else { return }
 
         workspace.frame = CGRect(x: content.minX, y: content.minY,

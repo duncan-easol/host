@@ -141,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             next: { [weak self] in self?.strip.previewRelative(offset: 1) },
             commit: { [weak self] in self?.strip.commitRunningAppCycle() }
         )
+        HotKeyCenter.shared.registerControlP { [weak self] in self?.strip.toggleRunningAppSearch() }
         if CommandTabOverride.isEnabled {
             let active = HotKeyCenter.shared.replaceCommandTab(
                 previous: { [weak self] in self?.strip.previewRelative(offset: -1) },

@@ -3,6 +3,22 @@ import Cocoa
 struct AppTab: Codable, Equatable {
     var name: String
     var bundleIdentifier: String
+    var isDetached = false
+
+    private enum CodingKeys: String, CodingKey { case name, bundleIdentifier, isDetached }
+
+    init(name: String, bundleIdentifier: String, isDetached: Bool = false) {
+        self.name = name
+        self.bundleIdentifier = bundleIdentifier
+        self.isDetached = isDetached
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        name = try values.decode(String.self, forKey: .name)
+        bundleIdentifier = try values.decode(String.self, forKey: .bundleIdentifier)
+        isDetached = try values.decodeIfPresent(Bool.self, forKey: .isDetached) ?? false
+    }
 
     var icon: NSImage? {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
