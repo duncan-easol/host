@@ -14,9 +14,9 @@ Then grant Accessibility, click a tab, and run **Tabs › Run Self-test**.
 
 A floating, non-activating strip at the top of a workspace rectangle. The header
 shows every regular running app in most-recently-used order, like Command-Tab made
-permanent. Clicking an ordinary app brings it forward without moving its windows.
-Clicking a hosted app moves its main window into the rectangle below the strip and
-raises it. `⌥⇧[` and `⌥⇧]` move through hosted apps, wrapping at either end.
+permanent. Clicking any app moves its main window into the rectangle below the
+strip and raises it. `⌥⇧[` and `⌥⇧]` move through hosted apps, wrapping at either
+end.
 Hosted apps keep their labelled tabs. Other running apps use compact icon buttons
 so the full list fits in the header; hover over one to see its name.
 

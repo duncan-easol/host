@@ -342,17 +342,40 @@ final class TabStripController: NSObject, NSWindowDelegate {
         if let index = button.workspaceIndex {
             select(index: index)
         } else {
-            activateRunningApp(bundleIdentifier: button.bundleIdentifier)
+            placeRunningApp(name: button.tabName, bundleIdentifier: button.bundleIdentifier)
         }
     }
 
-    private func activateRunningApp(bundleIdentifier: String) {
-        guard let app = WindowManager.runningApp(bundleIdentifier) else {
+    private func placeRunningApp(name: String, bundleIdentifier: String) {
+        guard AXPermission.isTrusted else {
+            AppDelegate.shared?.nagAboutPermission()
+            return
+        }
+        guard WindowManager.runningApp(bundleIdentifier) != nil else {
             refreshRunningApps()
             return
         }
-        app.unhide()
-        WindowManager.shared.activateOnly(bundleID: bundleIdentifier)
+        highlight(bundleIdentifier)
+        isWorkspaceFront = true
+        panel.level = .floating
+        panel.orderFrontRegardless()
+
+        if #available(macOS 14.0, *) {
+            NSApp.yieldActivation(toApplicationWithBundleIdentifier: bundleIdentifier)
+        }
+
+        WindowManager.shared.place(bundleID: bundleIdentifier, in: workspace.contentFrame) { result in
+            if let error = result.error {
+                Log.line("FAILED \(name): \(error)")
+                return
+            }
+            let drift = result.drift.map { String(format: "%.0fpt", $0) } ?? "unknown"
+            Log.line(String(format: "%@ placed from running-app header (waited %.2fs, drift %@)",
+                            name, result.waitedForWindow, drift))
+            Log.line("  requested(ax) \(NSStringFromRect(result.requested))")
+            Log.line("  actual(ax)    \(NSStringFromRect(result.actual ?? .zero))")
+            self.showStripIfAppropriate()
+        }
     }
 
     func select(index: Int) {

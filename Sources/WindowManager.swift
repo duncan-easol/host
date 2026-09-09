@@ -122,18 +122,6 @@ final class WindowManager {
         queue.async { self.boundWindows[bundleID] = nil }
     }
 
-    /// Bring a running app forward without adopting or moving any of its windows.
-    func activateOnly(bundleID: String) {
-        queue.async {
-            guard let app = Self.runningApp(bundleID) else { return }
-            let element = self.appElement(for: app.processIdentifier)
-            self.activate(app, appElement: element)
-            self.queue.asyncAfter(deadline: .now() + 0.3) {
-                self.ensureFrontmost(bundleID: bundleID)
-            }
-        }
-    }
-
     // MARK: - Implementation
 
     private func placeSync(bundleID: String, axRect: CGRect) -> PlacementResult {
