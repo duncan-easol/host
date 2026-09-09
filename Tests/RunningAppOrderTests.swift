@@ -12,6 +12,11 @@ struct RunningAppOrderTests {
         assert(runningAppOrder(eligible: ["mail", "notes"],
                                previous: ["mail", "notes"],
                                activated: "finder") == ["mail", "notes"])
+        assert(labelledRunningAppIDs(order: ["mail", "notes", "music"], limit: 2)
+            == Set(["mail", "notes"]))
+        assert(labelledRunningAppIDs(order: ["music", "mail", "notes"], limit: 2)
+            == Set(["music", "mail"]))
+        assert(labelledRunningAppIDs(order: ["mail"], limit: 0).isEmpty)
 
         var cycle = RunningAppCycle()
         assert(cycle.next(liveOrder: ["mail", "notes", "music"], current: "mail",

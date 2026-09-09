@@ -20,6 +20,11 @@ func runningAppOrder(eligible: [String], previous: [String], activated: String? 
     return order
 }
 
+/// The leading MRU entries get labels; the rest use compact icon buttons.
+func labelledRunningAppIDs(order: [String], limit: Int) -> Set<String> {
+    Set(order.prefix(max(0, limit)))
+}
+
 /// A stable view of the MRU list for one burst of shortcut presses.
 ///
 /// Activating an app immediately promotes it in the live MRU list. Cycling over

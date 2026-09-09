@@ -17,8 +17,10 @@ shows every regular running app in most-recently-used order, like Command-Tab ma
 permanent. Clicking any app moves its main window into the rectangle below the
 strip and raises it. `⌘⇧[` and `⌘⇧]` cycle through the running apps in MRU order,
 wrapping at either end.
-Hosted apps keep their labelled tabs. Other running apps use compact icon buttons
-so the full list fits in the header; hover over one to see its name.
+The newest apps keep labelled tabs. Older apps use compact icon buttons so the
+full list fits in the header. Activating a compact app promotes it into a labelled
+slot and collapses the oldest labelled app. Every button shows the app name when
+you hover over it.
 
 - `+` adds an app from `/Applications`, persisted to
   `~/Library/Application Support/Host/workspace.json`. The new tab is selected

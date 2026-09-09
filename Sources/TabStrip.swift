@@ -57,6 +57,7 @@ final class TabButton: NSButton {
     var tabName = ""
     var tabIcon: NSImage?
     var workspaceIndex: Int?
+    var showsLabel = false
     var onDragMoved: ((TabButton, CGPoint) -> Void)?
     var onDragEnded: ((TabButton) -> Void)?
 
@@ -163,7 +164,11 @@ final class TabStripController: NSObject, NSWindowDelegate {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         buttons.removeAll()
 
-        for app in orderedRunningApps() {
+        let runningApps = orderedRunningApps()
+        let labelLimit = max(1, min(workspace.tabs.count, runningApps.count))
+        let labelledIDs = labelledRunningAppIDs(order: recentAppIDs, limit: labelLimit)
+
+        for app in runningApps {
             guard let id = app.bundleIdentifier else { continue }
             let name = app.localizedName ?? id
             let workspaceIndex = workspace.tabs.firstIndex { $0.bundleIdentifier == id }
@@ -172,12 +177,13 @@ final class TabStripController: NSObject, NSWindowDelegate {
             button.tabName = name
             button.tabIcon = app.icon
             button.workspaceIndex = workspaceIndex
-            if workspaceIndex == nil {
-                styleRunningApp(button)
-            } else {
+            button.showsLabel = labelledIDs.contains(id)
+            if button.showsLabel {
                 style(button, title: name)
+            } else {
+                styleRunningApp(button)
             }
-            button.toolTip = workspaceIndex == nil ? name : "\(name), hosted"
+            button.toolTip = name
 
             if let workspaceIndex {
                 // Right-click removes the app from the managed workspace. It stays
@@ -266,8 +272,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
         ])
     }
 
-    /// Non-hosted apps use the compact icon treatment from Command-Tab. Hosted
-    /// apps keep their labels so the managed workspace remains easy to read.
+    /// Older MRU entries use the compact icon treatment from Command-Tab.
     private func styleRunningApp(_ button: TabButton) {
         button.isBordered = false
         button.setButtonType(.momentaryChange)
@@ -319,7 +324,7 @@ final class TabStripController: NSObject, NSWindowDelegate {
     private func applyChip(_ button: TabButton, active: Bool) {
         button.layer?.backgroundColor = Theme.current.chip.cgColor
         button.alphaValue = active ? 1 : 0.52
-        if button.workspaceIndex != nil {
+        if button.showsLabel {
             button.attributedTitle = Self.tabTitle(button.tabName, icon: button.tabIcon, active: active)
         }
     }
