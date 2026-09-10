@@ -1,5 +1,18 @@
 import Foundation
 
+/// Keep a prefix of recent app labels while reserving space for every icon.
+func fittingLabelCount(widths: [Double], available: Double, compactWidth: Double = 30) -> Int {
+    var remaining = available - Double(widths.count) * compactWidth
+    var count = 0
+    for width in widths {
+        let extra = max(0, width - compactWidth)
+        guard remaining >= extra else { break }
+        remaining -= extra
+        count += 1
+    }
+    return count
+}
+
 /// Keep eligible app identifiers in most-recently-used order.
 ///
 /// `seed` comes from the Window Server's front-to-back window order at launch.

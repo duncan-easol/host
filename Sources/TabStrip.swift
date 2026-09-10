@@ -207,6 +207,24 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
                                action: #selector(addClicked))
         stack.addArrangedSubview(add)
 
+        // Reserve the cog, add button, padding and gaps before allocating labels.
+        let widths = buttons.map { button in
+            Double(button.constraints.first {
+                $0.firstAttribute == .width && $0.secondItem == nil
+            }?.constant ?? 30)
+        }
+        let available = Double(workspace.frame.width - 52 - 24 - 30)
+            - Double(buttons.count) * Double(stack.spacing)
+        let fitting = fittingLabelCount(widths: widths, available: available)
+        for (index, button) in buttons.enumerated() where index >= fitting && button.showsLabel {
+            button.showsLabel = false
+            NSLayoutConstraint.deactivate(button.constraints.filter {
+                $0.firstAttribute == .width || $0.firstAttribute == .height
+            })
+            button.attributedTitle = NSAttributedString(string: "")
+            styleRunningApp(button)
+        }
+
         highlight(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
         cog.layer?.backgroundColor = Theme.current.chip.withAlphaComponent(0.55).cgColor
@@ -1028,6 +1046,9 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         guard !strip.equalTo(panel.frame) else { return }
 
         isSyncingStrip = true
+        // Drop label constraints before shrinking the panel, otherwise the old
+        // labelled row can force the bar to remain wider than the app window.
+        rebuild()
         panel.setFrame(strip, display: true)
         DispatchQueue.main.async { self.isSyncingStrip = false }
         // Resizing one window resizes the workspace, so the rest have to follow too.
