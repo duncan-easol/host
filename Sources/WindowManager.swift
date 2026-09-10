@@ -40,6 +40,7 @@ final class WindowManager {
     private var observers: [pid_t: AXObserver] = [:]
     /// The window we picked per app, so a second document window does not steal the tab.
     private var boundWindows: [String: AXUIElement] = [:]
+    private var unmanagedBundles = Set<String>()
 
     private init() {
         axSetTimeout(AXUIElementCreateSystemWide())
@@ -94,6 +95,7 @@ final class WindowManager {
     func snap(bundleID: String, in cocoaRect: CGRect, reason: String = "reached outside Host") {
         let axRect = Coords.flip(cocoaRect)
         queue.async {
+            guard !self.unmanagedBundles.contains(bundleID) else { return }
             guard let app = Self.runningApp(bundleID), !app.isHidden else { return }
             let element = self.appElement(for: app.processIdentifier)
             guard let window = self.waitForWindow(bundleID: bundleID, appElement: element, deadline: 1)
@@ -138,12 +140,31 @@ final class WindowManager {
     }
 
     func forget(bundleID: String) {
-        queue.async { self.boundWindows[bundleID] = nil }
+        queue.async {
+            self.unmanagedBundles.insert(bundleID)
+            self.boundWindows[bundleID] = nil
+        }
+    }
+
+    /// Read the bound window's current frame through the same callback used by
+    /// Accessibility move/resize notifications. Some apps do not reliably emit
+    /// a resize notification when their content window changes size.
+    func refreshGeometry(bundleID: String) {
+        queue.async {
+            guard !self.unmanagedBundles.contains(bundleID) else { return }
+            guard let window = self.boundWindows[bundleID],
+                  let axRect = axFrame(window) else { return }
+            let content = Coords.flip(axRect)
+            DispatchQueue.main.async {
+                self.onGeometryChange?(bundleID, content)
+            }
+        }
     }
 
     // MARK: - Implementation
 
     private func placeSync(bundleID: String, axRect: CGRect) -> PlacementResult {
+        unmanagedBundles.remove(bundleID)
         var launched = false
 
         var running = Self.runningApp(bundleID)

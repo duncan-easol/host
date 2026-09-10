@@ -63,7 +63,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     private var buttons: [TabButton] = []
     private var recentAppIDs: [String] = []
     private var runningAppCycle = RunningAppCycle()
-    private var workspaceHidden = false
+    private var commandTabPreview = false
     private var searchField: RunningAppSearchField!
     private var searchQuery = ""
     private(set) var activeIndex: Int?
@@ -145,6 +145,9 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             name: NSWorkspace.didTerminateApplicationNotification, object: nil)
         recentAppIDs = initialRunningApps().compactMap(\.bundleIdentifier)
         rebuild()
+        geometryPollTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) {
+            [weak self] _ in self?.refreshActiveGeometry()
+        }
     }
 
     // MARK: - UI
@@ -154,7 +157,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         buttons.removeAll()
 
         let runningApps = orderedRunningApps()
-        let labelLimit = max(1, min(workspace.tabs.count, runningApps.count))
+        let labelLimit = labelLimit(for: runningApps)
         let labelledIDs = labelledRunningAppIDs(order: recentAppIDs, limit: labelLimit)
 
         let visibleApps = searchQuery.isEmpty ? runningApps : runningApps.filter {
@@ -177,18 +180,29 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             }
             button.toolTip = name
 
-            // Every running app can be detached. Unsaved apps are remembered as
-            // detached the first time, so later clicks also leave them alone.
+            // Every running app gets a context menu. Unhosted apps can be added;
+            // hosted apps can be detached, attached, or removed.
             let menu = NSMenu()
-            let detach = NSMenuItem(
-                title: workspaceIndex.map { workspace.tabs[$0].isDetached } == true
-                    ? "Reattach to Host" : "Detach from Host",
-                action: #selector(toggleDetached(_:)), keyEquivalent: ""
-            )
-            detach.target = self
-            detach.representedObject = id
-            menu.addItem(detach)
-
+            if let workspaceIndex {
+                // Right-click removes the app from the managed workspace. It stays
+                // in this running-app list until the app itself quits.
+                let remove = NSMenuItem(title: "Stop Hosting \u{201C}\(name)\u{201D}",
+                                        action: #selector(removeTab(_:)), keyEquivalent: "")
+                remove.target = self
+                remove.tag = workspaceIndex
+                menu.addItem(remove)
+                let detach = NSMenuItem(title: workspace.tabs[workspaceIndex].isDetached ? "Attach to Workspace" : "Detach from Workspace",
+                                        action: #selector(toggleDetached(_:)), keyEquivalent: "")
+                detach.target = self
+                detach.tag = workspaceIndex
+                menu.addItem(detach)
+            } else {
+                let add = NSMenuItem(title: "Add to Workspace",
+                                     action: #selector(addRunningApp(_:)), keyEquivalent: "")
+                add.target = self
+                add.representedObject = id
+                menu.addItem(add)
+            }
             button.menu = menu
 
             stack.addArrangedSubview(button)
@@ -199,28 +213,34 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
                                action: #selector(addClicked))
         stack.addArrangedSubview(add)
 
-        // Reserve the cog, add button, padding and gaps before allocating labels.
-        let widths = buttons.map { button in
-            Double(button.constraints.first {
-                $0.firstAttribute == .width && $0.secondItem == nil
-            }?.constant ?? 30)
-        }
-        let available = Double(workspace.frame.width - 52 - 24 - 30)
-            - Double(buttons.count) * Double(stack.spacing)
-        let fitting = fittingLabelCount(widths: widths, available: available)
-        for (index, button) in buttons.enumerated() where index >= fitting && button.showsLabel {
-            button.showsLabel = false
-            NSLayoutConstraint.deactivate(button.constraints.filter {
-                $0.firstAttribute == .width || $0.firstAttribute == .height
-            })
-            button.attributedTitle = NSAttributedString(string: "")
-            styleRunningApp(button)
-        }
-
         highlight(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
         cog.layer?.backgroundColor = Theme.current.chip.withAlphaComponent(0.55).cgColor
         cog.contentTintColor = Theme.current.text
+    }
+
+    /// Labels are useful when there is room, but icons keep the strip usable at
+    /// narrow window widths. Estimate each button's width and spend the available
+    /// space on the most-recently-used labels first.
+    private func labelLimit(for apps: [NSRunningApplication]) -> Int {
+        let available = max(120, panel.contentView?.bounds.width ?? panel.frame.width) - 84
+        let maximum = min(workspace.tabs.count, apps.count)
+        let labelledIDs = recentAppIDs.prefix(maximum)
+        var limit = maximum
+
+        while limit > 0 {
+            let width = apps.reduce(CGFloat(0)) { total, app in
+                guard let id = app.bundleIdentifier else { return total }
+                if labelledIDs.prefix(limit).contains(id) {
+                    let name = app.localizedName ?? id
+                    return total + min(220, CGFloat(name.count) * 7.2 + 47)
+                }
+                return total + 30
+            } + CGFloat(max(0, apps.count - 1)) * stack.spacing + 30
+            if width <= available { break }
+            limit -= 1
+        }
+        return limit
     }
 
     func toggleRunningAppSearch() {
@@ -377,7 +397,14 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// icons, labels, and cards all sit behind the current app visually.
     private func applyChip(_ button: TabButton, active: Bool) {
         button.layer?.backgroundColor = Theme.current.chip.cgColor
-        button.alphaValue = active ? 1 : 0.52
+        button.alphaValue = commandTabPreview ? (active ? 1 : 0.22) : (active ? 1 : 0.52)
+        button.layer?.borderWidth = commandTabPreview && active ? 2 : 0
+        button.layer?.borderColor = commandTabPreview && active
+            ? NSColor.white.withAlphaComponent(0.9).cgColor : nil
+        button.layer?.shadowColor = commandTabPreview && active ? NSColor.black.cgColor : nil
+        button.layer?.shadowOpacity = commandTabPreview && active ? 0.45 : 0
+        button.layer?.shadowRadius = commandTabPreview && active ? 8 : 0
+        button.layer?.shadowOffset = .zero
         if button.showsLabel {
             button.attributedTitle = Self.tabTitle(button.tabName, icon: button.tabIcon, active: active)
         }
@@ -405,17 +432,26 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     private func selectRunningApp(bundleIdentifier: String, name: String? = nil) {
-        workspaceHidden = false
-        guard bundleIdentifier != Bundle.main.bundleIdentifier else {
-            panel.level = .floating
-            panel.orderFrontRegardless()
-            return
-        }
         if let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
+            if workspace.tabs[index].isDetached {
+                // Detached tabs are launcher entries only. Do not route through
+                // select(), which changes workspace active state before it
+                // foregrounds the app and can race an activation callback.
+                WindowManager.shared.forget(bundleID: bundleIdentifier)
+                highlight(bundleIdentifier)
+                WindowManager.shared.foreground(bundleID: bundleIdentifier)
+                return
+            }
             select(index: index)
         } else {
-            let appName = name ?? WindowManager.runningApp(bundleIdentifier)?.localizedName ?? bundleIdentifier
-            placeRunningApp(name: appName, bundleIdentifier: bundleIdentifier)
+            // A running app that is not in the workspace is not implicitly
+            // hosted by clicking its header button. This is also the behavior
+            // users expect after detaching an app: click to foreground it,
+            // choose Add to Workspace explicitly when hosting is wanted.
+            highlight(bundleIdentifier)
+            WindowManager.shared.forget(bundleID: bundleIdentifier)
+            WindowManager.shared.foreground(bundleID: bundleIdentifier)
+            Log.line("foregrounded unhosted (bundleIdentifier) from running-app header")
         }
     }
 
@@ -429,6 +465,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             return
         }
         highlight(bundleIdentifier)
+        transientHostedBundleID = bundleIdentifier
         isWorkspaceFront = true
         panel.level = .floating
         panel.orderFrontRegardless()
@@ -452,7 +489,6 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func select(index: Int) {
-        workspaceHidden = false
         guard index < workspace.tabs.count else { return }
         guard AXPermission.isTrusted else {
             AppDelegate.shared?.nagAboutPermission()
@@ -467,12 +503,10 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         panel.orderFrontRegardless()   // may have been hidden with the workspace
 
         if tab.isDetached {
-            isWorkspaceFront = false
-            panel.level = .normal
-            panel.orderBack(nil)
-            if #available(macOS 14.0, *) {
-                NSApp.yieldActivation(toApplicationWithBundleIdentifier: tab.bundleIdentifier)
-            }
+            // A detached tab is a launcher entry, not part of the workspace.
+            // Drop any stale placement binding before foregrounding it so an
+            // earlier AX callback cannot pull it back to the workspace frame.
+            WindowManager.shared.forget(bundleID: tab.bundleIdentifier)
             WindowManager.shared.foreground(bundleID: tab.bundleIdentifier)
             return
         }
@@ -494,23 +528,6 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             Log.line("  requested(ax) \(NSStringFromRect(result.requested))")
             Log.line("  actual(ax)    \(NSStringFromRect(result.actual ?? .zero))")
             // Keep the strip above the window that was just raised.
-            if let actual = result.actual,
-               actual.width > result.requested.width + 2 || actual.height > result.requested.height + 2,
-               self.activeIndex == index, !self.workspace.tabs[index].isDetached {
-                let visible = self.panel.screen?.visibleFrame ?? NSScreen.main!.visibleFrame
-                var frame = self.workspace.frame
-                frame.size.width = actual.width
-                frame.size.height = actual.height + self.workspace.stripHeight
-                frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
-                frame.origin.y = max(visible.minY, min(frame.minY, visible.maxY - frame.height))
-                self.workspace.frame = frame
-                self.isSyncingStrip = true
-                self.rebuild()
-                self.panel.setFrame(self.workspace.stripFrame, display: true)
-                self.isSyncingStrip = false
-                Store.save(self.workspace)
-                self.syncEveryTab()
-            }
             self.showStripIfAppropriate()
 
             // Did it actually come forward? Placement succeeding tells us nothing
@@ -529,25 +546,25 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func previewRelative(offset: Int) {
-        workspaceHidden = false
-        NSApp.unhideWithoutActivation()
-        // A new shortcut gesture ends the previous hide operation. Its delayed
-        // retry must not hide the app selected by this gesture.
-        hideGeneration += 1
+        // Command-Tab can begin while another app is frontmost. Keep the
+        // preview strip visible above that app without activating Host itself.
+        panel.level = .floating
+        panel.orderFrontRegardless()
+        commandTabPreview = true
         let liveOrder = recentAppIDs.filter { WindowManager.runningApp($0) != nil }
         guard let bundleIdentifier = runningAppCycle.preview(
             liveOrder: liveOrder,
             current: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
             offset: offset
         ) else { return }
-        panel.level = .floating
-        panel.orderFrontRegardless()
         highlight(bundleIdentifier)
     }
 
     func commitRunningAppCycle() {
         guard let bundleIdentifier = runningAppCycle.commit() else { return }
+        commandTabPreview = false
         selectRunningApp(bundleIdentifier: bundleIdentifier)
+        highlight(bundleIdentifier)
     }
 
     private func resetRunningAppCycle() {
@@ -592,22 +609,49 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         select(index: workspace.tabs.count - 1)
     }
 
-    @objc private func toggleDetached(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        let name = WindowManager.runningApp(id)?.localizedName ?? id
-        let detached = workspace.toggleDetached(name: name, bundleIdentifier: id)
-        if detached {
-            WindowManager.shared.forget(bundleID: id)
-            if let activeIndex,
-               workspace.tabs[activeIndex].bundleIdentifier == id { self.activeIndex = nil }
+    @objc private func removeTab(_ sender: NSMenuItem) {
+        let index = sender.tag
+        guard index < workspace.tabs.count else { return }
+        let removed = workspace.tabs.remove(at: index)
+
+        if transientHostedBundleID == removed.bundleIdentifier {
+            transientHostedBundleID = nil
+        }
+
+        // The app itself is left alone -- still running, window still where we
+        // put it. Removing a tab is forgetting about an app, not closing it.
+        WindowManager.shared.forget(bundleID: removed.bundleIdentifier)
+
+        if let active = activeIndex {
+            if active == index {
+                activeIndex = nil
+                // Removing the app that was keeping the workspace frontmost
+                // must also drop the panel out of the floating window level.
+                // No application-activation notification is guaranteed here.
+                isWorkspaceFront = false
+                panel.level = .normal
+            }
+            else if active > index { activeIndex = active - 1 }
         }
         Store.save(workspace)
         rebuild()
         AppDelegate.shared?.registerHotKeys()
-        Log.line("\(name) \(detached ? "detached from" : "attached to") workspace")
-        if !detached, let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == id }) {
-            select(index: index)
-        }
+        Log.line("removed \(removed.name) -- the app is still running, window left in place")
+    }
+
+    @objc private func addRunningApp(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let app = WindowManager.runningApp(id) else { return }
+        addTab(name: app.localizedName ?? id, bundleIdentifier: id)
+    }
+
+    @objc private func toggleDetached(_ sender: NSMenuItem) {
+        guard workspace.tabs.indices.contains(sender.tag) else { return }
+        workspace.tabs[sender.tag].isDetached.toggle()
+        Store.save(workspace)
+        rebuild()
+        Log.line("\(workspace.tabs[sender.tag].name) " +
+                 (workspace.tabs[sender.tag].isDetached ? "detached from" : "attached to") + " workspace")
     }
 
     // MARK: - Moving the workspace
@@ -705,7 +749,6 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func raiseStrip() {
-        guard !workspaceHidden else { return }
         isWorkspaceFront = true
         panel.level = .floating
         panel.orderFrontRegardless()
@@ -719,7 +762,6 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// appDidUnhide does not: coming back to one tab should not haul the other
     /// four onto the screen with it.
     func restoreWorkspace() {
-        guard !workspaceHidden else { return }
         raiseStrip()
         guard let index = activeIndex ?? savedActiveTabIndex() else { return }
         Log.line("restoring workspace: strip + \(workspace.tabs[index].name)")
@@ -761,7 +803,6 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     private func eligibleRunningApps() -> [NSRunningApplication] {
         NSWorkspace.shared.runningApplications.filter {
             !$0.isTerminated && $0.activationPolicy == .regular && $0.bundleIdentifier != nil
-                && $0.bundleIdentifier != Bundle.main.bundleIdentifier
         }
     }
 
@@ -891,21 +932,8 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let id = app.bundleIdentifier
         refreshRunningApps(promoting: id)
-        let attached = id.map { id in
-            workspace.tabs.contains { $0.bundleIdentifier == id && !$0.isDetached }
-        } == true
-        // Dock activation after the hide sequence is an explicit return to an
-        // attached app. Activation churn while hiding must keep the bar hidden.
-        if workspaceHidden, !isBulkHiding, attached, !app.isHidden {
-            workspaceHidden = false
-            NSApp.unhideWithoutActivation()
-        }
-        guard !workspaceHidden else {
-            panel.orderOut(nil)
-            return
-        }
         let ours = id == Bundle.main.bundleIdentifier
-            || id.map { id in workspace.tabs.contains { $0.bundleIdentifier == id && !$0.isDetached } } == true
+            || id.map { bundleID in workspace.tabs.contains { $0.bundleIdentifier == bundleID } } == true
 
         // Keep the highlight on whatever tab is genuinely frontmost, including when
         // you reach it with command-tab rather than by clicking. This is the only
@@ -917,27 +945,19 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             // Reached without clicking its tab, so nothing has sized it. Snapping
             // here is what stops a tab being active while its window sits at
             // whatever size the app itself last decided on.
-            if !workspace.tabs[index].isDetached {
-                WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame)
-            }
+            guard !workspace.tabs[index].isDetached else { return }
+            WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame)
         }
 
+        guard ours != isWorkspaceFront else { return }
         isWorkspaceFront = ours
 
-        // Regular apps all belong to the switcher now, so the strip floats above
-        // them as a permanent fixture. It only drops behind accessory and
-        // background processes that are absent from the header.
-        //
-        // Ordering it out was the first answer to "stop sitting on top of Firefox"
-        // and it overshot: the strip vanished the moment a hosted app lost focus,
-        // so the workspace looked like it had gone away. Dropping to the normal
-        // window level keeps it present while letting any other window cover it,
-        // which is what being unobtrusive should have meant.
+        // Only Host and apps in the workspace get the floating level needed for
+        // the strip to sit over a hosted window. Unrelated foreground apps leave
+        // the strip at normal level, so their windows can cover it naturally.
         panel.level = ours ? .floating : .normal
         if ours {
             panel.orderFrontRegardless()
-        } else {
-            panel.orderBack(nil)
         }
         Log.line("\(id ?? "another app") is front; strip level=\(ours ? "floating" : "normal") " +
                  "visible=\(panel.isVisible)")
@@ -945,7 +965,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
 
     /// Order the strip front only if the workspace is what is in front.
     private func showStripIfAppropriate() {
-        guard isWorkspaceFront, !workspaceHidden else { return }
+        guard isWorkspaceFront else { return }
         panel.orderFrontRegardless()
     }
 
@@ -954,23 +974,17 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// Set while we are hiding the other apps ourselves, so their own hide
     /// notifications do not re-enter this and start a cascade.
     private var isBulkHiding = false
-    private var hideGeneration = 0
 
     @objc private func appDidHide(_ note: Notification) {
         guard !isBulkHiding,
               let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let id = app.bundleIdentifier,
-              id == Bundle.main.bundleIdentifier
-                || workspace.tabs.contains(where: { $0.bundleIdentifier == id && !$0.isDetached }) else { return }
+              workspace.tabs.contains(where: { $0.bundleIdentifier == id && !$0.isDetached }) else { return }
 
         isBulkHiding = true
-        workspaceHidden = true
-        isWorkspaceFront = false
-        hideGeneration += 1
-        let generation = hideGeneration
         AppDelegate.shared?.holdWorkspaceForHide()
         Log.line("\(id) hidden; hiding the rest of the workspace")
-        for tab in workspace.tabs where tab.bundleIdentifier != id && !tab.isDetached {
+        for tab in workspace.tabs where tab.bundleIdentifier != id {
             WindowManager.runningApp(tab.bundleIdentifier)?.hide()
         }
         panel.orderOut(nil)
@@ -979,12 +993,8 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         // that is busy or mid-launch can miss it, which leaves one window of the
         // workspace stranded on screen after everything else has gone.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard generation == self.hideGeneration else {
-                self.isBulkHiding = false
-                return
-            }
             let stragglers = self.workspace.tabs
-                .filter { $0.bundleIdentifier != id && !$0.isDetached }
+                .filter { $0.bundleIdentifier != id }
                 .compactMap { WindowManager.runningApp($0.bundleIdentifier) }
                 .filter { !$0.isHidden }
             if !stragglers.isEmpty {
@@ -1016,14 +1026,28 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// Set while we reposition the panel ourselves, so the windowDidMove handler
     /// does not read our own move as a user drag and push the window back.
     private var isSyncingStrip = false
+    private var geometryPollTimer: Timer?
+    private var transientHostedBundleID: String?
 
     /// The user resized or moved the app window by its own edges. Re-derive the
     /// workspace from the window rather than the other way round, so the strip
     /// keeps sitting exactly on top of it at exactly its width.
     func followWindow(bundleID: String, content: CGRect) {
-        guard let active = activeIndex, active < workspace.tabs.count,
-              workspace.tabs[active].bundleIdentifier == bundleID else { return }
-        guard !workspace.tabs[active].isDetached else { return }
+        // A detached app remains in the running-app header, but its window is
+        // outside workspace geometry even when another app is active.
+        if workspace.tabs.contains(where: { $0.bundleIdentifier == bundleID && $0.isDetached }) {
+            return
+        }
+        if let active = activeIndex, active < workspace.tabs.count,
+           workspace.tabs[active].bundleIdentifier == bundleID {
+            guard !workspace.tabs[active].isDetached else { return }
+        } else {
+            // Apps selected from the running-app header may be placed without
+            // becoming persisted tabs. Only that explicitly selected app may
+            // drive the strip; a stopped-hosting app must not fall through here.
+            guard transientHostedBundleID == bundleID,
+                  NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID else { return }
+        }
         guard !isSyncingStrip else { return }
 
         workspace.frame = CGRect(x: content.minX, y: content.minY,
@@ -1039,12 +1063,27 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         guard !strip.equalTo(panel.frame) else { return }
 
         isSyncingStrip = true
-        // Drop label constraints before shrinking the panel, otherwise the old
-        // labelled row can force the bar to remain wider than the app window.
-        rebuild()
         panel.setFrame(strip, display: true)
+        rebuild()
         DispatchQueue.main.async { self.isSyncingStrip = false }
         // Resizing one window resizes the workspace, so the rest have to follow too.
         syncEveryTabSoon()
+    }
+
+    private func refreshActiveGeometry() {
+        guard panel.isVisible else { return }
+        if let active = activeIndex, workspace.tabs.indices.contains(active) {
+            let tab = workspace.tabs[active]
+            guard !tab.isDetached,
+                  NSWorkspace.shared.frontmostApplication?.bundleIdentifier == tab.bundleIdentifier
+            else { return }
+            WindowManager.shared.refreshGeometry(bundleID: tab.bundleIdentifier)
+            return
+        }
+
+        // Running-app header selections are transient rather than persisted tabs.
+        guard let bundleID = transientHostedBundleID,
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID else { return }
+        WindowManager.shared.refreshGeometry(bundleID: bundleID)
     }
 }
