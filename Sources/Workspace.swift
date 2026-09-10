@@ -37,6 +37,17 @@ struct AppTab: Codable, Equatable {
 struct Workspace: Codable {
     var tabs: [AppTab]
     var frameString: String
+
+    /// Toggle a saved tab, or remember an unsaved running app as detached.
+    @discardableResult
+    mutating func toggleDetached(name: String, bundleIdentifier: String) -> Bool {
+        if let index = tabs.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
+            tabs[index].isDetached.toggle()
+            return tabs[index].isDetached
+        }
+        tabs.append(AppTab(name: name, bundleIdentifier: bundleIdentifier, isDetached: true))
+        return true
+    }
     /// Computed, not stored, so it stays out of the JSON. It is chrome metrics
     /// rather than workspace state, and persisting it meant a saved file pinned
     /// every existing install to the old height.

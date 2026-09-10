@@ -176,22 +176,27 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             }
             button.toolTip = name
 
+            // Every running app can be detached. Unsaved apps are remembered as
+            // detached the first time, so later clicks also leave them alone.
+            let menu = NSMenu()
+            let detach = NSMenuItem(
+                title: workspaceIndex.map { workspace.tabs[$0].isDetached } == true
+                    ? "Attach to Workspace" : "Detach from Workspace",
+                action: #selector(toggleDetached(_:)), keyEquivalent: ""
+            )
+            detach.target = self
+            detach.representedObject = id
+            menu.addItem(detach)
+
             if let workspaceIndex {
-                // Right-click removes the app from the managed workspace. It stays
-                // in this running-app list until the app itself quits.
-                let menu = NSMenu()
+                menu.addItem(.separator())
                 let remove = NSMenuItem(title: "Stop Hosting \u{201C}\(name)\u{201D}",
                                         action: #selector(removeTab(_:)), keyEquivalent: "")
                 remove.target = self
                 remove.tag = workspaceIndex
                 menu.addItem(remove)
-                let detach = NSMenuItem(title: workspace.tabs[workspaceIndex].isDetached ? "Attach to Workspace" : "Detach from Workspace",
-                                        action: #selector(toggleDetached(_:)), keyEquivalent: "")
-                detach.target = self
-                detach.tag = workspaceIndex
-                menu.addItem(detach)
-                button.menu = menu
             }
+            button.menu = menu
 
             stack.addArrangedSubview(button)
             buttons.append(button)
@@ -559,12 +564,18 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     @objc private func toggleDetached(_ sender: NSMenuItem) {
-        guard workspace.tabs.indices.contains(sender.tag) else { return }
-        workspace.tabs[sender.tag].isDetached.toggle()
+        guard let id = sender.representedObject as? String else { return }
+        let name = WindowManager.runningApp(id)?.localizedName ?? id
+        let detached = workspace.toggleDetached(name: name, bundleIdentifier: id)
+        if detached {
+            WindowManager.shared.forget(bundleID: id)
+            if let activeIndex,
+               workspace.tabs[activeIndex].bundleIdentifier == id { self.activeIndex = nil }
+        }
         Store.save(workspace)
         rebuild()
-        Log.line("\(workspace.tabs[sender.tag].name) " +
-                 (workspace.tabs[sender.tag].isDetached ? "detached from" : "attached to") + " workspace")
+        AppDelegate.shared?.registerHotKeys()
+        Log.line("\(name) \(detached ? "detached from" : "attached to") workspace")
     }
 
     // MARK: - Moving the workspace
