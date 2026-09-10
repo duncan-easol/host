@@ -394,6 +394,11 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     private func selectRunningApp(bundleIdentifier: String, name: String? = nil) {
+        guard bundleIdentifier != Bundle.main.bundleIdentifier else {
+            panel.level = .floating
+            panel.orderFrontRegardless()
+            return
+        }
         if let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
             select(index: index)
         } else {
@@ -735,6 +740,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     private func eligibleRunningApps() -> [NSRunningApplication] {
         NSWorkspace.shared.runningApplications.filter {
             !$0.isTerminated && $0.activationPolicy == .regular && $0.bundleIdentifier != nil
+                && $0.bundleIdentifier != Bundle.main.bundleIdentifier
         }
     }
 
