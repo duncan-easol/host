@@ -880,6 +880,15 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let id = app.bundleIdentifier
         refreshRunningApps(promoting: id)
+        let attached = id.map { id in
+            workspace.tabs.contains { $0.bundleIdentifier == id && !$0.isDetached }
+        } == true
+        // Dock activation after the hide sequence is an explicit return to an
+        // attached app. Activation churn while hiding must keep the bar hidden.
+        if workspaceHidden, !isBulkHiding, attached, !app.isHidden {
+            workspaceHidden = false
+            NSApp.unhideWithoutActivation()
+        }
         guard !workspaceHidden else {
             panel.orderOut(nil)
             return
