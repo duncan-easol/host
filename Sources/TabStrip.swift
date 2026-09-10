@@ -449,7 +449,13 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         panel.orderFrontRegardless()   // may have been hidden with the workspace
 
         if tab.isDetached {
-            WindowManager.runningApp(tab.bundleIdentifier)?.activate(options: [.activateIgnoringOtherApps])
+            isWorkspaceFront = false
+            panel.level = .normal
+            panel.orderBack(nil)
+            if #available(macOS 14.0, *) {
+                NSApp.yieldActivation(toApplicationWithBundleIdentifier: tab.bundleIdentifier)
+            }
+            WindowManager.shared.foreground(bundleID: tab.bundleIdentifier)
             return
         }
 
@@ -494,6 +500,8 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             current: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
             offset: offset
         ) else { return }
+        panel.level = .floating
+        panel.orderFrontRegardless()
         highlight(bundleIdentifier)
     }
 
@@ -857,7 +865,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         let id = app.bundleIdentifier
         refreshRunningApps(promoting: id)
         let ours = id == Bundle.main.bundleIdentifier
-            || id.map { recentAppIDs.contains($0) } == true
+            || id.map { id in workspace.tabs.contains { $0.bundleIdentifier == id && !$0.isDetached } } == true
 
         // Keep the highlight on whatever tab is genuinely frontmost, including when
         // you reach it with command-tab rather than by clicking. This is the only
@@ -869,11 +877,11 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             // Reached without clicking its tab, so nothing has sized it. Snapping
             // here is what stops a tab being active while its window sits at
             // whatever size the app itself last decided on.
-            guard !workspace.tabs[index].isDetached else { return }
-            WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame)
+            if !workspace.tabs[index].isDetached {
+                WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame)
+            }
         }
 
-        guard ours != isWorkspaceFront else { return }
         isWorkspaceFront = ours
 
         // Regular apps all belong to the switcher now, so the strip floats above
@@ -888,6 +896,8 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         panel.level = ours ? .floating : .normal
         if ours {
             panel.orderFrontRegardless()
+        } else {
+            panel.orderBack(nil)
         }
         Log.line("\(id ?? "another app") is front; strip level=\(ours ? "floating" : "normal") " +
                  "visible=\(panel.isVisible)")

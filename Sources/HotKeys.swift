@@ -122,6 +122,7 @@ final class HotKeyCenter {
     private var globalModifierMonitor: Any?
     private var localModifierMonitor: Any?
     private let commandTabInterceptor = CommandTabInterceptor()
+    private var bracketGestureActive = false
 
     private init() {}
 
@@ -130,13 +131,21 @@ final class HotKeyCenter {
                                      commit: @escaping () -> Void) {
         let modifiers = UInt32(optionKey | shiftKey)
         register(keyCode: UInt32(kVK_ANSI_LeftBracket), modifiers: modifiers,
-                 id: 100, handler: previous)
+                 id: 100, handler: { [weak self] in
+                    self?.bracketGestureActive = true
+                    previous()
+                 })
         register(keyCode: UInt32(kVK_ANSI_RightBracket), modifiers: modifiers,
-                 id: 101, handler: next)
+                 id: 101, handler: { [weak self] in
+                    self?.bracketGestureActive = true
+                    next()
+                 })
 
-        let modifierChanged: (NSEvent) -> Void = { event in
+        let modifierChanged: (NSEvent) -> Void = { [weak self] event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard !flags.contains([.option, .shift]) else { return }
+            guard self?.bracketGestureActive == true,
+                  !flags.contains([.option, .shift]) else { return }
+            self?.bracketGestureActive = false
             DispatchQueue.main.async(execute: commit)
         }
         globalModifierMonitor = NSEvent.addGlobalMonitorForEvents(
@@ -175,6 +184,7 @@ final class HotKeyCenter {
     }
 
     func unregisterAll() {
+        bracketGestureActive = false
         for ref in refs where ref != nil { UnregisterEventHotKey(ref!) }
         refs.removeAll()
         handlers.removeAll()
