@@ -63,6 +63,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     private var buttons: [TabButton] = []
     private var recentAppIDs: [String] = []
     private var runningAppCycle = RunningAppCycle()
+    private var workspaceHidden = false
     private var searchField: RunningAppSearchField!
     private var searchQuery = ""
     private(set) var activeIndex: Int?
@@ -394,6 +395,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     private func selectRunningApp(bundleIdentifier: String, name: String? = nil) {
+        workspaceHidden = false
         guard bundleIdentifier != Bundle.main.bundleIdentifier else {
             panel.level = .floating
             panel.orderFrontRegardless()
@@ -440,6 +442,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func select(index: Int) {
+        workspaceHidden = false
         guard index < workspace.tabs.count else { return }
         guard AXPermission.isTrusted else {
             AppDelegate.shared?.nagAboutPermission()
@@ -499,6 +502,11 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func previewRelative(offset: Int) {
+        workspaceHidden = false
+        NSApp.unhideWithoutActivation()
+        // A new shortcut gesture ends the previous hide operation. Its delayed
+        // retry must not hide the app selected by this gesture.
+        hideGeneration += 1
         let liveOrder = recentAppIDs.filter { WindowManager.runningApp($0) != nil }
         guard let bundleIdentifier = runningAppCycle.preview(
             liveOrder: liveOrder,
@@ -686,6 +694,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func raiseStrip() {
+        guard !workspaceHidden else { return }
         isWorkspaceFront = true
         panel.level = .floating
         panel.orderFrontRegardless()
@@ -699,6 +708,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// appDidUnhide does not: coming back to one tab should not haul the other
     /// four onto the screen with it.
     func restoreWorkspace() {
+        guard !workspaceHidden else { return }
         raiseStrip()
         guard let index = activeIndex ?? savedActiveTabIndex() else { return }
         Log.line("restoring workspace: strip + \(workspace.tabs[index].name)")
@@ -870,6 +880,10 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let id = app.bundleIdentifier
         refreshRunningApps(promoting: id)
+        guard !workspaceHidden else {
+            panel.orderOut(nil)
+            return
+        }
         let ours = id == Bundle.main.bundleIdentifier
             || id.map { id in workspace.tabs.contains { $0.bundleIdentifier == id && !$0.isDetached } } == true
 
@@ -911,7 +925,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
 
     /// Order the strip front only if the workspace is what is in front.
     private func showStripIfAppropriate() {
-        guard isWorkspaceFront else { return }
+        guard isWorkspaceFront, !workspaceHidden else { return }
         panel.orderFrontRegardless()
     }
 
@@ -920,17 +934,23 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// Set while we are hiding the other apps ourselves, so their own hide
     /// notifications do not re-enter this and start a cascade.
     private var isBulkHiding = false
+    private var hideGeneration = 0
 
     @objc private func appDidHide(_ note: Notification) {
         guard !isBulkHiding,
               let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               let id = app.bundleIdentifier,
-              workspace.tabs.contains(where: { $0.bundleIdentifier == id && !$0.isDetached }) else { return }
+              id == Bundle.main.bundleIdentifier
+                || workspace.tabs.contains(where: { $0.bundleIdentifier == id && !$0.isDetached }) else { return }
 
         isBulkHiding = true
+        workspaceHidden = true
+        isWorkspaceFront = false
+        hideGeneration += 1
+        let generation = hideGeneration
         AppDelegate.shared?.holdWorkspaceForHide()
         Log.line("\(id) hidden; hiding the rest of the workspace")
-        for tab in workspace.tabs where tab.bundleIdentifier != id {
+        for tab in workspace.tabs where tab.bundleIdentifier != id && !tab.isDetached {
             WindowManager.runningApp(tab.bundleIdentifier)?.hide()
         }
         panel.orderOut(nil)
@@ -939,8 +959,12 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         // that is busy or mid-launch can miss it, which leaves one window of the
         // workspace stranded on screen after everything else has gone.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            guard generation == self.hideGeneration else {
+                self.isBulkHiding = false
+                return
+            }
             let stragglers = self.workspace.tabs
-                .filter { $0.bundleIdentifier != id }
+                .filter { $0.bundleIdentifier != id && !$0.isDetached }
                 .compactMap { WindowManager.runningApp($0.bundleIdentifier) }
                 .filter { !$0.isHidden }
             if !stragglers.isEmpty {
