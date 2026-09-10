@@ -55,43 +55,6 @@ private final class RunningAppSearchField: NSSearchField {
     }
 }
 
-/// A tab button that distinguishes a click from a drag.
-///
-/// NSButton's own mouseDown runs a tracking loop and swallows every event until
-/// mouseUp, so there is no way to see a drag from the outside. Taking over the
-/// loop is the only way to get both behaviours from one press.
-final class TabButton: NSButton {
-    var bundleIdentifier = ""
-    var tabName = ""
-    var tabIcon: NSImage?
-    var workspaceIndex: Int?
-    var showsLabel = false
-    var onDragMoved: ((TabButton, CGPoint) -> Void)?
-    var onDragEnded: ((TabButton) -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        let start = event.locationInWindow
-        var dragging = false
-
-        while let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp],
-                                         until: .distantFuture,
-                                         inMode: .eventTracking, dequeue: true) {
-            if next.type == .leftMouseUp { break }
-            // A few points of slop, so a slightly unsteady click is still a click.
-            if !dragging && abs(next.locationInWindow.x - start.x) > 4 { dragging = true }
-            if dragging, let parent = superview {
-                onDragMoved?(self, parent.convert(next.locationInWindow, from: nil))
-            }
-        }
-
-        if dragging {
-            onDragEnded?(self)
-        } else if let action, let target {
-            sendAction(action, to: target)
-        }
-    }
-}
-
 final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     private(set) var workspace: Workspace
     private let panel: TabStripPanel

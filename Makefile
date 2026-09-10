@@ -57,6 +57,8 @@ test:
 	@build/theme-rendering-tests
 	@swiftc -o build/running-app-order-tests Sources/TabNavigation.swift Sources/RunningAppOrder.swift Tests/RunningAppOrderTests.swift
 	@build/running-app-order-tests
+	@swiftc -o build/tab-button-tests Sources/TabButton.swift Tests/TabButtonTests.swift
+	@build/tab-button-tests
 
 # Clears a stale grant when macOS has the app ticked but window calls still fail.
 # The app will prompt again on next launch.
