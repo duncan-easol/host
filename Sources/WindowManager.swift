@@ -76,6 +76,10 @@ final class WindowManager {
                 self.ensureFrontmost(bundleID: bundleID)
             }
             self.queue.asyncAfter(deadline: .now() + 0.45) {
+                // The controller accommodates a refused minimum size. Do not
+                // overwrite that corrected placement with the obsolete target.
+                if let actual = result.actual,
+                   actual.width > axRect.width + 2 || actual.height > axRect.height + 2 { return }
                 self.reassert(bundleID: bundleID, axRect: axRect, reason: "after placement")
             }
         }

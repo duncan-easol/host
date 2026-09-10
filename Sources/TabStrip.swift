@@ -494,6 +494,23 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             Log.line("  requested(ax) \(NSStringFromRect(result.requested))")
             Log.line("  actual(ax)    \(NSStringFromRect(result.actual ?? .zero))")
             // Keep the strip above the window that was just raised.
+            if let actual = result.actual,
+               actual.width > result.requested.width + 2 || actual.height > result.requested.height + 2,
+               self.activeIndex == index, !self.workspace.tabs[index].isDetached {
+                let visible = self.panel.screen?.visibleFrame ?? NSScreen.main!.visibleFrame
+                var frame = self.workspace.frame
+                frame.size.width = actual.width
+                frame.size.height = actual.height + self.workspace.stripHeight
+                frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
+                frame.origin.y = max(visible.minY, min(frame.minY, visible.maxY - frame.height))
+                self.workspace.frame = frame
+                self.isSyncingStrip = true
+                self.rebuild()
+                self.panel.setFrame(self.workspace.stripFrame, display: true)
+                self.isSyncingStrip = false
+                Store.save(self.workspace)
+                self.syncEveryTab()
+            }
             self.showStripIfAppropriate()
 
             // Did it actually come forward? Placement succeeding tells us nothing
@@ -588,6 +605,9 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         rebuild()
         AppDelegate.shared?.registerHotKeys()
         Log.line("\(name) \(detached ? "detached from" : "attached to") workspace")
+        if !detached, let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == id }) {
+            select(index: index)
+        }
     }
 
     // MARK: - Moving the workspace
