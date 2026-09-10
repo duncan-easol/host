@@ -3,6 +3,8 @@ import Cocoa
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static private(set) var shared: AppDelegate?
     private var strip: TabStripController!
+    private var permissionTimer: Timer?
+    private var lastPermissionState = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -16,6 +18,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Store.save(strip.workspace)
 
         registerHotKeys()
+        lastPermissionState = AXPermission.isTrusted
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let trusted = AXPermission.isTrusted
+            guard trusted != self.lastPermissionState else { return }
+            self.lastPermissionState = trusted
+            self.registerHotKeys()
+            Log.line("accessibility changed: \(trusted); refreshed shortcuts")
+        }
         apply(theme: Theme.current)
         holdWorkspace(for: 2)
 

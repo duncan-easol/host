@@ -3,6 +3,11 @@ import Foundation
 @main
 struct RunningAppOrderTests {
     static func main() {
+        assert(fittingLabelCount(widths: [100, 90, 80], available: 270) == 3)
+        assert(fittingLabelCount(widths: [100, 90, 80], available: 160) == 1)
+        assert(fittingLabelCount(widths: [100, 90, 80], available: 90) == 0)
+        assert(fittingLabelCount(widths: [100, 90, 80], available: 60) == 0)
+        assert(fittingLabelCount(widths: [], available: 0) == 0)
         assert(runningAppOrder(eligible: ["mail", "notes", "mail"], previous: []) == ["mail", "notes"])
         assert(runningAppOrder(eligible: ["mail", "notes", "music"],
                                previous: ["notes", "mail"],

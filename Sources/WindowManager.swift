@@ -47,6 +47,21 @@ final class WindowManager {
 
     // MARK: - Public API
 
+    /// Raise a detached app without changing or tracking its window geometry.
+    func foreground(bundleID: String) {
+        queue.async {
+            guard let app = Self.runningApp(bundleID) else { return }
+            app.unhide()
+            let element = self.appElement(for: app.processIdentifier)
+            if let window = self.primaryWindow(of: element) {
+                axSetBool(window, kAXMinimizedAttribute as String, false)
+                axSetBool(window, kAXMainAttribute as String, true)
+                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            }
+            self.activate(app, appElement: element)
+        }
+    }
+
     /// Launch if needed, find the main window, move it into `cocoaRect`, raise it.
     func place(bundleID: String, in cocoaRect: CGRect, completion: @escaping (PlacementResult) -> Void) {
         let axRect = Coords.flip(cocoaRect)
@@ -61,6 +76,10 @@ final class WindowManager {
                 self.ensureFrontmost(bundleID: bundleID)
             }
             self.queue.asyncAfter(deadline: .now() + 0.45) {
+                // The controller accommodates a refused minimum size. Do not
+                // overwrite that corrected placement with the obsolete target.
+                if let actual = result.actual,
+                   actual.width > axRect.width + 2 || actual.height > axRect.height + 2 { return }
                 self.reassert(bundleID: bundleID, axRect: axRect, reason: "after placement")
             }
         }
