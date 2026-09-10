@@ -32,8 +32,8 @@ you hover over it.
   then. Adding an app that is already a tab selects the existing one rather than
   creating a second — tabs are keyed by bundle id throughout, so duplicates would
   fight over the same bound window and geometry state.
-- Right-click a hosted app to stop hosting it. The app stays in the running-app
-  header until it quits, and its window stays put
+- Right-click an app and choose **Detach from Host** to let its window move and
+  resize independently. Choose **Reattach to Host** to restore shared positioning.
 - Quitting an app closes its tab and moves you to the next tab that is still
   running. A tab lasts as long as its app does, so the strip is a view of what is
   running rather than a standing set of apps you curate — quit something, add it

@@ -182,21 +182,13 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             let menu = NSMenu()
             let detach = NSMenuItem(
                 title: workspaceIndex.map { workspace.tabs[$0].isDetached } == true
-                    ? "Attach to Workspace" : "Detach from Workspace",
+                    ? "Reattach to Host" : "Detach from Host",
                 action: #selector(toggleDetached(_:)), keyEquivalent: ""
             )
             detach.target = self
             detach.representedObject = id
             menu.addItem(detach)
 
-            if let workspaceIndex {
-                menu.addItem(.separator())
-                let remove = NSMenuItem(title: "Stop Hosting \u{201C}\(name)\u{201D}",
-                                        action: #selector(removeTab(_:)), keyEquivalent: "")
-                remove.target = self
-                remove.tag = workspaceIndex
-                menu.addItem(remove)
-            }
             button.menu = menu
 
             stack.addArrangedSubview(button)
@@ -581,25 +573,6 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         AppDelegate.shared?.registerHotKeys()
         Log.line("added \(name) (\(id))")
         select(index: workspace.tabs.count - 1)
-    }
-
-    @objc private func removeTab(_ sender: NSMenuItem) {
-        let index = sender.tag
-        guard index < workspace.tabs.count else { return }
-        let removed = workspace.tabs.remove(at: index)
-
-        // The app itself is left alone -- still running, window still where we
-        // put it. Removing a tab is forgetting about an app, not closing it.
-        WindowManager.shared.forget(bundleID: removed.bundleIdentifier)
-
-        if let active = activeIndex {
-            if active == index { activeIndex = nil }
-            else if active > index { activeIndex = active - 1 }
-        }
-        Store.save(workspace)
-        rebuild()
-        AppDelegate.shared?.registerHotKeys()
-        Log.line("removed \(removed.name) -- the app is still running, window left in place")
     }
 
     @objc private func toggleDetached(_ sender: NSMenuItem) {
