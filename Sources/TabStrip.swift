@@ -444,6 +444,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     private func selectRunningApp(bundleIdentifier: String, name: String? = nil) {
+        updateStripLevel(for: bundleIdentifier)
         if let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
             if workspace.tabs[index].isDetached {
                 // Detached tabs are launcher entries only. Do not route through
@@ -515,6 +516,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         panel.orderFrontRegardless()   // may have been hidden with the workspace
 
         if tab.isDetached {
+            updateStripLevel(for: tab.bundleIdentifier)
             // A detached tab is a launcher entry, not part of the workspace.
             // Drop any stale placement binding before foregrounding it so an
             // earlier AX callback cannot pull it back to the workspace frame.
@@ -944,8 +946,6 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let id = app.bundleIdentifier
         refreshRunningApps(promoting: id)
-        let ours = id == Bundle.main.bundleIdentifier
-            || id.map { bundleID in workspace.tabs.contains { $0.bundleIdentifier == bundleID } } == true
 
         // Keep the highlight on whatever tab is genuinely frontmost, including when
         // you reach it with command-tab rather than by clicking. This is the only
@@ -957,11 +957,21 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             // Reached without clicking its tab, so nothing has sized it. Snapping
             // here is what stops a tab being active while its window sits at
             // whatever size the app itself last decided on.
-            guard !workspace.tabs[index].isDetached else { return }
-            WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame)
+            if !workspace.tabs[index].isDetached {
+                WindowManager.shared.snap(bundleID: id, in: workspace.contentFrame)
+            }
         }
 
-        guard ours != isWorkspaceFront else { return }
+        // Keep the preview visible until the modifier is released.
+        guard !commandTabPreview else { return }
+        updateStripLevel(for: id)
+    }
+
+    private func updateStripLevel(for id: String?) {
+        let ours = id == Bundle.main.bundleIdentifier
+            || id.map { workspace.hosts(bundleIdentifier: $0) } == true
+        // Preview raises the panel independently of isWorkspaceFront, so always
+        // restore its level, even when selecting the already-frontmost app.
         isWorkspaceFront = ours
 
         // Only Host and apps in the workspace get the floating level needed for
@@ -970,6 +980,8 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         panel.level = ours ? .floating : .normal
         if ours {
             panel.orderFrontRegardless()
+        } else {
+            panel.orderBack(nil)
         }
         Log.line("\(id ?? "another app") is front; strip level=\(ours ? "floating" : "normal") " +
                  "visible=\(panel.isVisible)")
