@@ -50,6 +50,14 @@ final class ThemeBarView: NSView {
 private final class RunningAppSearchField: NSSearchField {
     var onCancel: (() -> Void)?
 
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { // Escape
+            onCancel?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
     }
@@ -252,7 +260,11 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             cog.isHidden = true
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
-            searchField.becomeFirstResponder()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.searchField.isHidden else { return }
+                self.panel.makeKey()
+                self.panel.makeFirstResponder(self.searchField)
+            }
         } else {
             closeRunningAppSearch()
         }
