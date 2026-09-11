@@ -12,9 +12,9 @@ import Cocoa
 /// full-screen video. Without it the strip stays on the Space it belongs to,
 /// which is also where the hosted windows are.
 final class TabStripPanel: NSPanel {
-    init(frame: CGRect) {
+    init(frame: CGRect, acceptsKeyboardInput: Bool = false) {
         super.init(contentRect: frame,
-                   styleMask: [.borderless, .nonactivatingPanel],
+                   styleMask: acceptsKeyboardInput ? [.borderless] : [.borderless, .nonactivatingPanel],
                    backing: .buffered,
                    defer: false)
         isFloatingPanel = true
@@ -63,6 +63,18 @@ private final class RunningAppSearchField: NSSearchField {
     }
 }
 
+private final class AppSearchCard: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        let path = Theme.roundedBarPath(bounds.insetBy(dx: 1, dy: 1), radius: 14)
+        Theme.current.fill(path, stripeWidth: 34)
+        Theme.current.chip.withAlphaComponent(0.82).setFill()
+        path.fill()
+        Theme.current.text.withAlphaComponent(0.2).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+}
+
 final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     private(set) var workspace: Workspace
     private let panel: TabStripPanel
@@ -74,6 +86,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     private var commandTabPreview = false
     private var searchField: RunningAppSearchField!
     private var searchQuery = ""
+    private let searchPanel = TabStripPanel(frame: .zero, acceptsKeyboardInput: true)
     private(set) var activeIndex: Int?
 
     init(workspace: Workspace) {
@@ -104,19 +117,34 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         ])
 
         searchField = RunningAppSearchField()
-        searchField.placeholderString = "Find running app"
-        searchField.target = self
-        searchField.action = #selector(searchSubmitted(_:))
+        searchField.placeholderString = ""
+        searchField.isBezeled = false
+        searchField.isBordered = false
+        searchField.drawsBackground = false
+        searchField.focusRingType = .none
+        searchField.font = .systemFont(ofSize: 23, weight: .medium)
+        searchField.setAccessibilityLabel("Find an app")
+        if let cell = searchField.cell as? NSSearchFieldCell {
+            cell.searchButtonCell = nil
+            cell.cancelButtonCell = nil
+        }
+        // NSSearchField sends its action after typing pauses. Selection must
+        // happen only through the Enter command handled by the delegate.
+        searchField.target = nil
+        searchField.action = nil
         searchField.delegate = self
         searchField.isHidden = true
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.onCancel = { [weak self] in self?.closeRunningAppSearch() }
-        background.addSubview(searchField)
+        let searchContent = AppSearchCard()
+        searchPanel.contentView = searchContent
+        searchPanel.isReleasedWhenClosed = false
+        searchContent.addSubview(searchField)
         NSLayoutConstraint.activate([
-            searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: cog.leadingAnchor, constant: -12),
-            searchField.centerYAnchor.constraint(equalTo: background.centerYAnchor),
-            searchField.heightAnchor.constraint(equalToConstant: 28),
+            searchField.leadingAnchor.constraint(equalTo: searchContent.leadingAnchor, constant: 18),
+            searchField.trailingAnchor.constraint(equalTo: searchContent.trailingAnchor, constant: -18),
+            searchField.topAnchor.constraint(equalTo: searchContent.topAnchor, constant: 12),
+            searchField.heightAnchor.constraint(equalToConstant: 34),
         ])
 
         stack.orientation = .horizontal
@@ -168,12 +196,18 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         let labelLimit = labelLimit(for: runningApps)
         let labelledIDs = labelledRunningAppIDs(order: recentAppIDs, limit: labelLimit)
 
-        let visibleApps = searchQuery.isEmpty ? runningApps : runningApps.filter {
-            ($0.localizedName ?? "").localizedCaseInsensitiveContains(searchQuery)
+        var entries = runningApps.compactMap { app -> (id: String, name: String, icon: NSImage?)? in
+            guard let id = app.bundleIdentifier else { return nil }
+            return (id, app.localizedName ?? id, app.icon)
         }
-        for app in visibleApps {
-            guard let id = app.bundleIdentifier else { continue }
-            let name = app.localizedName ?? id
+        if !searchField.isHidden {
+            let runningIDs = Set(entries.map(\.id))
+            entries += workspace.tabs.filter { !runningIDs.contains($0.bundleIdentifier) }
+                .map { ($0.bundleIdentifier, $0.name, $0.icon) }
+        }
+        for app in entries {
+            let id = app.id
+            let name = app.name
             let workspaceIndex = workspace.tabs.firstIndex { $0.bundleIdentifier == id }
             let button = TabButton(title: "", target: self, action: #selector(tabClicked(_:)))
             button.bundleIdentifier = id
@@ -253,17 +287,22 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
 
     func toggleRunningAppSearch() {
         if searchField.isHidden {
+            resumeAfterHide()
             searchQuery = ""
             searchField.stringValue = ""
             searchField.isHidden = false
-            stack.isHidden = true
-            cog.isHidden = true
+            panel.level = .floating
+            searchPanel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.minY - 66,
+                                       width: min(420, panel.frame.width), height: 58), display: true)
+            panel.addChildWindow(searchPanel, ordered: .above)
             NSApp.activate(ignoringOtherApps: true)
-            panel.makeKeyAndOrderFront(nil)
+            panel.orderFrontRegardless()
+            searchPanel.makeKeyAndOrderFront(nil)
+            rebuild()
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.searchField.isHidden else { return }
-                self.panel.makeKey()
-                self.panel.makeFirstResponder(self.searchField)
+                self.searchPanel.makeKey()
+                self.searchPanel.makeFirstResponder(self.searchField)
             }
         } else {
             closeRunningAppSearch()
@@ -275,17 +314,19 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         searchField.stringValue = ""
         searchField.resignFirstResponder()
         searchField.isHidden = true
+        panel.removeChildWindow(searchPanel)
+        searchPanel.orderOut(nil)
+        panel.makeFirstResponder(nil)
         stack.isHidden = false
         cog.isHidden = false
         panel.orderFrontRegardless()
         rebuild()
     }
 
-    @objc private func searchSubmitted(_ sender: NSSearchField) {
-        guard let app = orderedRunningApps().first(where: {
-            ($0.localizedName ?? "").localizedCaseInsensitiveContains(sender.stringValue)
-        }), let id = app.bundleIdentifier else { return }
-        let name = app.localizedName ?? id
+    private func searchSubmitted(_ sender: NSSearchField) {
+        guard let app = buttons.first(where: { appSearchMatches(name: $0.tabName, query: sender.stringValue) }) else { return }
+        let id = app.bundleIdentifier
+        let name = app.tabName
         closeRunningAppSearch()
         selectRunningApp(bundleIdentifier: id, name: name)
     }
@@ -294,7 +335,18 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         guard let field = notification.object as? NSSearchField, field === searchField else { return }
         searchQuery = field.stringValue
         rebuild()
-        searchField.becomeFirstResponder()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            closeRunningAppSearch()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            searchSubmitted(searchField)
+            return true
+        }
+        return false
     }
 
     @objc private func cogClicked() {
@@ -423,9 +475,18 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     private func highlight(_ bundleIdentifier: String?) {
+        let matches = buttons.filter { appSearchMatches(name: $0.tabName, query: searchQuery) }
         for button in buttons {
-            applyChip(button, active: button.bundleIdentifier == bundleIdentifier)
+            let active = searchField.isHidden ? button.bundleIdentifier == bundleIdentifier
+                : appSearchMatches(name: button.tabName, query: searchQuery)
+            applyChip(button, active: active)
+            if !searchField.isHidden, button === matches.first {
+                button.layer?.borderWidth = 2
+                button.layer?.borderColor = Theme.current.text.cgColor
+            }
         }
+        searchField.textColor = Theme.current.text
+        searchPanel.contentView?.needsDisplay = true
     }
 
     /// Repaint the strip after the theme changes. The buttons are rebuilt because
@@ -439,12 +500,20 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
 
     @objc private func tabClicked(_ sender: NSButton) {
         guard let button = sender as? TabButton else { return }
+        if !searchField.isHidden { closeRunningAppSearch() }
         resetRunningAppCycle()
         selectRunningApp(bundleIdentifier: button.bundleIdentifier, name: button.tabName)
     }
 
     private func selectRunningApp(bundleIdentifier: String, name: String? = nil) {
+        resumeAfterHide()
         updateStripLevel(for: bundleIdentifier)
+        if WindowManager.runningApp(bundleIdentifier) == nil,
+           !workspace.hosts(bundleIdentifier: bundleIdentifier),
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+            return
+        }
         if let index = workspace.tabs.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
             if workspace.tabs[index].isDetached {
                 // Detached tabs are launcher entries only. Do not route through
@@ -560,6 +629,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func previewRelative(offset: Int) {
+        resumeAfterHide()
         // Command-Tab can begin while another app is frontmost. Keep the
         // preview strip visible above that app without activating Host itself.
         panel.level = .floating
@@ -763,6 +833,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     func raiseStrip() {
+        guard !workspaceHidden else { return }
         isWorkspaceFront = true
         panel.level = .floating
         panel.orderFrontRegardless()
@@ -776,6 +847,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// appDidUnhide does not: coming back to one tab should not haul the other
     /// four onto the screen with it.
     func restoreWorkspace() {
+        guard !workspaceHidden, searchField.isHidden else { return }
         raiseStrip()
         guard let index = activeIndex ?? savedActiveTabIndex() else { return }
         Log.line("restoring workspace: strip + \(workspace.tabs[index].name)")
@@ -945,7 +1017,20 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     @objc private func appDidActivate(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let id = app.bundleIdentifier
+        if id == Bundle.main.bundleIdentifier, !searchField.isHidden {
+            searchPanel.makeKeyAndOrderFront(nil)
+            searchPanel.makeFirstResponder(searchField)
+        }
         refreshRunningApps(promoting: id)
+        if workspaceHidden {
+            if shouldRestoreHiddenHeader(isHiding: isBulkHiding, appIsHidden: app.isHidden,
+                                         appIsHosted: id.map { workspace.hosts(bundleIdentifier: $0) } == true) {
+                resumeAfterHide()
+            } else {
+                panel.orderOut(nil)
+                return
+            }
+        }
 
         // Keep the highlight on whatever tab is genuinely frontmost, including when
         // you reach it with command-tab rather than by clicking. This is the only
@@ -968,6 +1053,10 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     }
 
     private func updateStripLevel(for id: String?) {
+        guard !workspaceHidden else {
+            panel.orderOut(nil)
+            return
+        }
         let ours = id == Bundle.main.bundleIdentifier
             || id.map { workspace.hosts(bundleIdentifier: $0) } == true
         // Preview raises the panel independently of isWorkspaceFront, so always
@@ -989,7 +1078,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
 
     /// Order the strip front only if the workspace is what is in front.
     private func showStripIfAppropriate() {
-        guard isWorkspaceFront else { return }
+        guard isWorkspaceFront, !workspaceHidden else { return }
         panel.orderFrontRegardless()
     }
 
@@ -998,6 +1087,14 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
     /// Set while we are hiding the other apps ourselves, so their own hide
     /// notifications do not re-enter this and start a cascade.
     private var isBulkHiding = false
+    private var workspaceHidden = false
+    private var hideGeneration = 0
+
+    private func resumeAfterHide() {
+        workspaceHidden = false
+        isBulkHiding = false
+        hideGeneration += 1
+    }
 
     @objc private func appDidHide(_ note: Notification) {
         guard !isBulkHiding,
@@ -1006,9 +1103,14 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
               workspace.tabs.contains(where: { $0.bundleIdentifier == id && !$0.isDetached }) else { return }
 
         isBulkHiding = true
+        workspaceHidden = true
+        isWorkspaceFront = false
+        hideGeneration += 1
+        let generation = hideGeneration
+        if !searchField.isHidden { closeRunningAppSearch() }
         AppDelegate.shared?.holdWorkspaceForHide()
         Log.line("\(id) hidden; hiding the rest of the workspace")
-        for tab in workspace.tabs where tab.bundleIdentifier != id {
+        for tab in workspace.tabs where tab.bundleIdentifier != id && !tab.isDetached {
             WindowManager.runningApp(tab.bundleIdentifier)?.hide()
         }
         panel.orderOut(nil)
@@ -1017,8 +1119,9 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         // that is busy or mid-launch can miss it, which leaves one window of the
         // workspace stranded on screen after everything else has gone.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            guard self.hideGeneration == generation else { return }
             let stragglers = self.workspace.tabs
-                .filter { $0.bundleIdentifier != id }
+                .filter { $0.bundleIdentifier != id && !$0.isDetached }
                 .compactMap { WindowManager.runningApp($0.bundleIdentifier) }
                 .filter { !$0.isHidden }
             if !stragglers.isEmpty {
