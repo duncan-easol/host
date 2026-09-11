@@ -63,18 +63,6 @@ private final class RunningAppSearchField: NSSearchField {
     }
 }
 
-private final class AppSearchCard: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        let path = Theme.roundedBarPath(bounds.insetBy(dx: 1, dy: 1), radius: 14)
-        Theme.current.fill(path, stripeWidth: 34)
-        Theme.current.chip.withAlphaComponent(0.82).setFill()
-        path.fill()
-        Theme.current.text.withAlphaComponent(0.2).setStroke()
-        path.lineWidth = 1
-        path.stroke()
-    }
-}
-
 final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     private(set) var workspace: Workspace
     private let panel: TabStripPanel
@@ -122,7 +110,7 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         searchField.isBordered = false
         searchField.drawsBackground = false
         searchField.focusRingType = .none
-        searchField.font = .systemFont(ofSize: 23, weight: .medium)
+        searchField.font = .systemFont(ofSize: 14, weight: .medium)
         searchField.setAccessibilityLabel("Find an app")
         if let cell = searchField.cell as? NSSearchFieldCell {
             cell.searchButtonCell = nil
@@ -136,15 +124,20 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
         searchField.isHidden = true
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.onCancel = { [weak self] in self?.closeRunningAppSearch() }
-        let searchContent = AppSearchCard()
+        // A compact query pill keeps typed text visible without a launcher card.
+        let searchContent = NSView()
+        searchContent.wantsLayer = true
+        searchContent.layer?.cornerRadius = 14
+        searchContent.layer?.masksToBounds = true
         searchPanel.contentView = searchContent
         searchPanel.isReleasedWhenClosed = false
+        searchPanel.hasShadow = false
         searchContent.addSubview(searchField)
         NSLayoutConstraint.activate([
-            searchField.leadingAnchor.constraint(equalTo: searchContent.leadingAnchor, constant: 18),
-            searchField.trailingAnchor.constraint(equalTo: searchContent.trailingAnchor, constant: -18),
-            searchField.topAnchor.constraint(equalTo: searchContent.topAnchor, constant: 12),
-            searchField.heightAnchor.constraint(equalToConstant: 34),
+            searchField.leadingAnchor.constraint(equalTo: searchContent.leadingAnchor, constant: 12),
+            searchField.trailingAnchor.constraint(equalTo: searchContent.trailingAnchor, constant: -12),
+            searchField.centerYAnchor.constraint(equalTo: searchContent.centerYAnchor),
+            searchField.heightAnchor.constraint(equalToConstant: 20),
         ])
 
         stack.orientation = .horizontal
@@ -292,8 +285,10 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             searchField.stringValue = ""
             searchField.isHidden = false
             panel.level = .floating
-            searchPanel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.minY - 66,
-                                       width: min(420, panel.frame.width), height: 58), display: true)
+            let searchWidth = min(180, panel.frame.width - 24)
+            searchPanel.setFrame(NSRect(x: panel.frame.midX - searchWidth / 2,
+                                       y: panel.frame.minY - 34,
+                                       width: searchWidth, height: 28), display: true)
             panel.addChildWindow(searchPanel, ordered: .above)
             NSApp.activate(ignoringOtherApps: true)
             panel.orderFrontRegardless()
@@ -486,6 +481,9 @@ final class TabStripController: NSObject, NSWindowDelegate, NSSearchFieldDelegat
             }
         }
         searchField.textColor = Theme.current.text
+        searchPanel.contentView?.layer?.backgroundColor = Theme.current.chip.cgColor
+        searchPanel.contentView?.layer?.borderColor = Theme.current.text.withAlphaComponent(0.2).cgColor
+        searchPanel.contentView?.layer?.borderWidth = 1
         searchPanel.contentView?.needsDisplay = true
     }
 
